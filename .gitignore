@@ -1,0 +1,6 @@
+# Ambiente virtual
+venv/
+
+# Arquivos de credenciais
+.env
+credentials.json

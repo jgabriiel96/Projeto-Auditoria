@@ -1,0 +1,11 @@
+pandas
+psycopg2-binary
+gspread
+oauth2client
+google-api-python-client
+python-dotenv
+selenium
+webdriver-manager
+pyinstaller
+tkcalendar
+requests
