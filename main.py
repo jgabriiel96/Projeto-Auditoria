@@ -136,8 +136,6 @@ def carregar_filtros_thread(queue_gui, client_id):
             driver.quit()
             print("INFO: Navegador fechado.")
 
-# --- O RESTANTE DO CÓDIGO PERMANECE IDÊNTICO ---
-
 def save_report_thread(queue_gui, data, final=True):
     try:
         lista_divergencias, client_id, total_pedidos, duration_seconds = data

@@ -4,7 +4,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
-from core.utils import retry # Supondo que você tenha este decorador em seu projeto
+from core.utils import retry
 
 @retry(tentativas=3, delay=5)
 def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
@@ -31,7 +31,7 @@ def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
         print("INFO: Clicando no link de e-mail para ativar a sessão...")
         email_login_link_xpath = f"//td[normalize-space()='{client_id}']/following-sibling::td[1]/a"
 
-        # --- PARTE 1: CLIQUE CORRIGIDO (JÁ FUNCIONANDO) ---
+        # --- PARTE 1: CLIQUE ---
         print("INFO: Aguardando visibilidade do link de login...")
         link_elemento = wait.until(EC.visibility_of_element_located((By.XPATH, email_login_link_xpath)))
         
