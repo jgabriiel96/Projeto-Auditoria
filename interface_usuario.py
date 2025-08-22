@@ -1,3 +1,5 @@
+# interface_usuario.py (Versão Final V2.1)
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
@@ -53,6 +55,10 @@ class App:
         self.end_date_entry = DateEntry(self.params_frame, width=12, date_pattern='y-mm-dd', maxdate=datetime.now())
         self.end_date_entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=5)
         self.end_date_entry.bind("<<DateEntrySelected>>", self._validate_all_fields)
+
+        # V2.1 - Adiciona o Label para exibir a margem de tolerância
+        self.margin_label = ttk.Label(self.params_frame, text="Margem de Tolerância: (Aguardando auditoria)")
+        self.margin_label.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=(10, 5))
 
         filters_frame = ttk.LabelFrame(main_frame, text="Filtros Obrigatórios", padding="10")
         filters_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
@@ -133,11 +139,11 @@ class App:
         for child in self.scrollable_frame_carrier.winfo_children(): child.configure(state=new_state)
         if is_running:
             self.start_button.pack_forget()
-            self.stop_button.pack()
+            self.stop_button.pack(side="right", padx=(0, 5))
             self.stop_button.config(text="Parar Auditoria", state="normal")
         else:
             self.stop_button.pack_forget()
-            self.start_button.pack()
+            self.start_button.pack(side="right")
             self._validate_all_fields()
             self.start_time = None 
 
@@ -155,12 +161,14 @@ class App:
         if not client_id_str.isdigit():
             self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
             self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
+            self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
             self._validate_all_fields()
             return
         if not force_refresh and client_id_str == self.last_searched_client_id:
             return
         self.last_searched_client_id = client_id_str
         self.api_token = None
+        self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
         self.update_log("INFO: Autenticando e buscando filtros para o cliente...\n")
         self._update_ui_state(False, loading_filters=True)
         self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
@@ -191,6 +199,10 @@ class App:
 
     def start_audit(self):
         if self.is_running: return
+        
+        # V2.1 - Limpa o texto da margem ao iniciar uma nova auditoria
+        self.margin_label.config(text="Margem de Tolerância: (Buscando...)")
+        
         client_id = int(self.client_id_entry.get())
         start_date = self.start_date_entry.get()
         end_date = self.end_date_entry.get()
@@ -221,7 +233,6 @@ class App:
             if isinstance(message, dict):
                 msg_type = message.get("type")
                 
-                # CORREÇÃO: A lógica para processar a mensagem 'filters_loaded' estava faltando
                 if msg_type == "filters_loaded":
                     self.update_log("INFO: Recebendo dados de filtros do backend...\n")
                     self._update_ui_state(False) # Reabilita a UI
@@ -230,6 +241,20 @@ class App:
                     self._popular_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras, message["carriers"], "Transportadoras")
                     if not self.api_token:
                         messagebox.showerror("Erro de Autenticação", "Não foi possível obter o token. Verifique o perfil do navegador e a conexão.")
+                
+                # V2.1 - Lógica para tratar a nova mensagem e atualizar a interface
+                elif msg_type == "margin_info":
+                    config = message.get("config", {})
+                    margin_type = config.get("type")
+                    margin_value = config.get("value")
+                    texto_margem = "Margem de Tolerância: "
+                    if margin_type == "ABSOLUTE":
+                        texto_margem += f"R$ {margin_value:.2f} (Valor Fixo)"
+                    elif margin_type == "PERCENTAGE":
+                        texto_margem += f"{margin_value}% (Percentual)"
+                    else:
+                        texto_margem += "Não identificada"
+                    self.margin_label.config(text=texto_margem)
                 
                 elif msg_type == "ask_save":
                     data_to_save = message["data"]
@@ -251,6 +276,7 @@ class App:
             self.root.after(100, self.process_gui_queue)
 
     def validate_number(self, P): return P.isdigit() or P == ""
+
     def update_log(self, message):
         if self.log_text.winfo_exists():
             self.log_text.config(state="normal")
@@ -258,6 +284,7 @@ class App:
             self.log_text.see(tk.END)
             self.log_text.config(state="disabled")
             self.root.update_idletasks()
+
     def _validate_all_fields(self, *args):
         try:
             client_id_ok = self.client_id_entry.get().isdigit()

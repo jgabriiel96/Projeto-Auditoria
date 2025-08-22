@@ -1,3 +1,5 @@
+# main.py (Versão Final V2.1)
+
 import interface_usuario as gui
 from core import database, comparator, sheets, intelipost
 from selenium import webdriver
@@ -10,9 +12,8 @@ import threading
 import queue
 import configparser
 import time
-import os # Importação para manipulação de caminhos
+import os
 
-# --- A CLASSE Logger NÃO MUDA ---
 class Logger:
     def __init__(self, queue_gui, terminal_original):
         self.queue = queue_gui
@@ -23,7 +24,6 @@ class Logger:
     def flush(self):
         self.terminal.flush()
 
-# --- FUNÇÃO INTELIGENTE PARA ENCONTRAR CAMINHOS ---
 def _get_browser_paths():
     """
     Tenta detectar automaticamente os caminhos do Chrome e do Brave.
@@ -52,30 +52,24 @@ def _get_browser_paths():
                 if os.path.isfile(brave_path):
                     paths['brave_exec'] = brave_path
                     break
-
-    # Adicionar lógica para outros sistemas operacionais (macOS, Linux) se necessário
     
     return paths
 
-# --- FUNÇÃO PRINCIPAL MODIFICADA ---
 def carregar_filtros_thread(queue_gui, client_id):
     driver = None
     try:
         config = configparser.ConfigParser()
         config.read('config.ini')
         
-        # 1. Lê as configurações do arquivo .ini
         caminho_executavel = config.get('BROWSER', 'caminho_executavel', fallback=None)
         user_data_dir = config.get('BROWSER', 'user_data_dir', fallback=None)
         profile_directory = config.get('BROWSER', 'profile_directory', fallback='Default')
         headless_mode = config.getboolean('AUTOMATION', 'headless', fallback=False)
 
-        # 2. Se os caminhos estiverem em branco, tenta detectar automaticamente
         if not caminho_executavel or not user_data_dir:
             print("INFO: Tentando detectar caminhos de navegador automaticamente...")
             detected_paths = _get_browser_paths()
             
-            # Prioriza Brave, depois Chrome, se ambos forem detectados
             detected_exec = detected_paths.get('brave_exec') or detected_paths.get('chrome_exec')
             detected_user_data = detected_paths.get('brave_user_data') or detected_paths.get('chrome_user_data')
             
@@ -86,7 +80,6 @@ def carregar_filtros_thread(queue_gui, client_id):
                 user_data_dir = detected_user_data
                 print(f"INFO: Perfil de usuário encontrado em: {user_data_dir}")
 
-        # 3. Validação final
         if not caminho_executavel or not user_data_dir or not os.path.isdir(user_data_dir):
             raise FileNotFoundError("Não foi possível localizar o navegador ou o perfil de usuário. "
                                     "Verifique se o Chrome/Brave está instalado ou especifique os caminhos no arquivo config.ini.")
@@ -100,7 +93,7 @@ def carregar_filtros_thread(queue_gui, client_id):
         if headless_mode:
             print("INFO: Modo headless ativado. O navegador não será visível.")
             options.add_argument("--headless")
-            options.add_argument("--window-size=1920,1080") # Tamanho de janela recomendado para headless
+            options.add_argument("--window-size=1920,1080")
 
         print("INFO: Iniciando navegador com o perfil de usuário existente...")
         servico = Service(ChromeDriverManager().install())
@@ -163,11 +156,22 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
     lista_final_divergencias = []
     total_pedidos_original = 0
     try:
+        # V2 - Busca a configuração da margem UMA VEZ antes de iniciar o loop
+        config_margem = intelipost.obter_configuracao_margem_api(api_token)
+        if not config_margem:
+            # Se não conseguir obter a margem, é um erro crítico. Aborta a execução.
+            queue_gui.put({"type": "error", "title": "Erro Crítico!", "message": 'Não foi possível obter a configuração da margem de tolerância da Intelipost.\n\nA auditoria não pode continuar.', "done": True})
+            return
+
+        # V2.1 - Envia a configuração da margem para a interface gráfica
+        queue_gui.put({"type": "margin_info", "config": config_margem})
+
         df_pedidos = database.obter_pedidos_para_auditoria(client_id, data_inicio, data_fim, lista_ids_transportadoras)
         total_pedidos_original = len(df_pedidos)
         if df_pedidos.empty:
             queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhum pedido encontrado.", "done": True})
             return
+            
         print(f"\nINFO: Token obtido. Iniciando processamento de {total_pedidos_original} pedidos via API...")
         pedidos_processados = 0
         for _, pedido in df_pedidos.iterrows():
@@ -175,16 +179,24 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             if stop_event.is_set():
                 print("\nINFO: Processo interrompido.")
                 break
+            
             order_number = pedido['so_order_number']
             transportadora_nome = pedido['lp_name']
+            
             print(f"--- Processando Pedido {pedidos_processados}/{total_pedidos_original}: {order_number} ({transportadora_nome}) ---")
+            
             chave_cte, valor_frete = intelipost.obter_dados_via_api(str(order_number), api_token, data_inicio, data_fim, lista_ids_warehouses)
+            
             if not chave_cte or valor_frete is None:
                 print(f"AVISO: Não foi possível obter dados via API para o pedido {order_number}. Pulando.")
                 continue
-            divergencia = comparator.encontrar_divergencias(pedido, valor_frete, chave_cte, transportadora_nome)
+            
+            # V2 - Passa a configuração da margem para a função de comparação
+            divergencia = comparator.encontrar_divergencias(pedido, valor_frete, chave_cte, transportadora_nome, config_margem)
+            
             if divergencia:
                 lista_final_divergencias.append(divergencia)
+
     except Exception as e:
         print(f"\nERRO CRÍTICO NA THREAD DE AUDITORIA: {e}")
         queue_gui.put({"type": "error", "title": "Erro Crítico!", "message": f'Erro inesperado:\n\n{e}', "done": True})
@@ -201,6 +213,7 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             queue_gui.put({"type": "info", "title": "Processo Finalizado!", "message": 'Nenhuma divergência encontrada.', "done": True})
         else:
             q_control.put({"action": "finish_stop"})
+            
         if not stop_event.is_set():
             print("\nPROCESSO DE AUDITORIA FINALIZADO.")
 
@@ -212,6 +225,7 @@ if __name__ == "__main__":
     app = gui.App(root, q_gui, q_control)
     sys.stdout = Logger(q_gui, sys.__stdout__)
     automation_thread = None
+    
     def control_queue_monitor():
         global automation_thread
         try:
@@ -242,6 +256,7 @@ if __name__ == "__main__":
             pass
         if root.winfo_exists():
             root.after(100, control_queue_monitor)
+            
     root.after(100, control_queue_monitor)
     root.mainloop()
     sys.stdout = sys.__stdout__

@@ -1,3 +1,5 @@
+# core/intelipost.py (Versão Final V2.1)
+
 import time
 import requests
 from selenium.webdriver.support.ui import WebDriverWait
@@ -163,3 +165,66 @@ def obter_dados_via_api(order_number: str, api_token: str, data_inicio_str: str,
     except Exception as e:
         print(f"ERRO (API): Falha ao buscar dados para o pedido {order_number}. Detalhe: {e}")
         return None, None
+
+# ==============================================================================
+# V2 - NOVA FUNÇÃO PARA CAPTURAR A MARGEM DE TOLERÂNCIA VIA API
+# ==============================================================================
+def obter_configuracao_margem_api(api_token: str) -> dict | None:
+    """
+    Busca a configuração da margem de tolerância (ABSOLUTE ou PERCENTAGE) 
+    diretamente da API GraphQL da Intelipost.
+
+    Args:
+        api_token (str): O token de autorização JWT.
+
+    Returns:
+        dict | None: Um dicionário com 'type' e 'value' da margem, ou None se falhar.
+    """
+    if not api_token: return None
+    
+    # Query GraphQL descoberta na fase de investigação
+    graphql_query = {
+        "operationName": None,
+        "variables": {},
+        "query": "{\n  reconConfig {\n    marginType\n    marginFixedValue\n    marginPercentageValue\n  }\n}\n"
+    }
+
+    auth_token = api_token if api_token.lower().startswith('bearer ') else f'Bearer {api_token}'
+    headers = {
+        "Authorization": auth_token, 
+        "Content-Type": "application/json", 
+        "Origin": "https://secure.intelipost.com.br", 
+        "Referer": "https://secure.intelipost.com.br/"
+    }
+
+    try:
+        print("INFO (API V2): Buscando configuração da margem de tolerância...")
+        response = requests.post("https://graphql.intelipost.com.br/", json=graphql_query, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+
+        recon_config = data.get("data", {}).get("reconConfig")
+        if not recon_config:
+            print("ERRO (API V2): Estrutura 'reconConfig' não encontrada na resposta da API.")
+            return None
+
+        margin_type = recon_config.get("marginType")
+        
+        config_margem = {}
+        if margin_type == "ABSOLUTE":
+            config_margem['type'] = "ABSOLUTE"
+            config_margem['value'] = recon_config.get("marginFixedValue", 0.0)
+            print(f"SUCESSO (API V2): Margem configurada como valor FIXO de R$ {config_margem['value']}.")
+        elif margin_type == "PERCENTAGE":
+            config_margem['type'] = "PERCENTAGE"
+            config_margem['value'] = recon_config.get("marginPercentageValue", 0.0)
+            print(f"SUCESSO (API V2): Margem configurada como PERCENTUAL de {config_margem['value']}%.")
+        else:
+            print(f"AVISO (API V2): Tipo de margem desconhecido ou não definido ('{margin_type}').")
+            return None
+        
+        return config_margem
+
+    except Exception as e:
+        print(f"ERRO (API V2): Falha ao buscar configuração da margem. Detalhe: {e}")
+        return None

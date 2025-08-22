@@ -1,4 +1,4 @@
-# core/sheets.py
+# core/sheets.py (Versão Final V2.1)
 
 import gspread
 # A biblioteca antiga 'oauth2client' não é mais necessária.
@@ -89,7 +89,8 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_e
                 f"R$ {div.get('valor_banco', 0):.2f}".replace('.', ','),
                 f"R$ {div.get('valor_intelipost', 0):.2f}".replace('.', ','),
                 f"R$ {div.get('diferenca_valor', 0):.2f}".replace('.', ','),
-                f"R$ {div.get('margem_aplicada', 0):.2f}".replace('.', ','),
+                # V2.1 - CORREÇÃO: Trata a 'margem_aplicada' como texto, pois ela já vem formatada do comparator.py
+                div.get('margem_aplicada', 'N/A'),
                 div.get('status', '')]
             linhas_para_adicionar.append(linha)
         
