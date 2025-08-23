@@ -33,9 +33,9 @@ def encontrar_divergencias(pedido_db, valor_intelipost: float | None, chave_cte_
         # V2 - A comparação agora usa o limite de tolerância calculado dinamicamente
         if abs(diferenca_numerica) > limite_tolerancia:
             if diferenca_numerica > 0:
-                status_conferencia = "Custo no pedido superior ao da Intelipost"
+                status_conferencia = "Custo no pedido superior ao do SEFAZ"
             else:
-                status_conferencia = "Custo no pedido inferior ao da Intelipost"
+                status_conferencia = "Custo no pedido inferior ao do SEFAZ"
             
             divergencias['valor_banco'] = custo_db
             divergencias['valor_intelipost'] = valor_intelipost
