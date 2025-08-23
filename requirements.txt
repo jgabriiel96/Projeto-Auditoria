@@ -9,3 +9,4 @@ webdriver-manager
 pyinstaller
 tkcalendar
 requests
+psutil
