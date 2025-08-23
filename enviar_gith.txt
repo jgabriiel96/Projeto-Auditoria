@@ -5,7 +5,7 @@ git status
 git add .
 
 # 2. Salva com uma mensagem
-git commit -m "Atualizações Importantes"
+git commit -m "Versão 1.0"
 
 # 3. Envia para o GitHub
 git push origin main
