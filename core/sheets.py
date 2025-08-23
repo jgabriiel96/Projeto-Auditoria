@@ -78,7 +78,7 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_e
         
         novos_cabecalhos = [
             'Data Auditoria', 'Pedido', 'Transportadora', 'Chave Acesso (Ct-e)', 'Campo Divergente',
-            'Custo de envio no pedido IP', 'Custo de envio na Intelipost',
+            'Custo de envio pedido', 'Custo de envio SEFAZ',
             'Valor da Diferença', 'Margem Aplicada', 'Status']
         
         linhas_para_adicionar = [novos_cabecalhos]
