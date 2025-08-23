@@ -1,0 +1,11 @@
+#Verifica oque foi adicionado ou atualizado
+git status
+
+# 1. Adiciona tudo
+git add .
+
+# 2. Salva com uma mensagem
+git commit -m "O que eu fiz nesta alteração"
+
+# 3. Envia para o GitHub
+git push origin main
