@@ -18,6 +18,7 @@ import os
 import subprocess
 import psutil
 import socket
+import pandas as pd
 
 class Logger:
     def __init__(self, queue_gui, terminal_original):
@@ -110,28 +111,21 @@ def carregar_filtros_thread(queue_gui, client_id):
         api_token = intelipost.preparar_pagina_e_capturar_token(driver, str(client_id))
         warehouses = []
         carriers = []
-        margin_config = None # Inicializa a config da margem
+        margin_config = None
         if api_token:
             warehouses = intelipost.obter_centros_de_distribuicao_api(api_token)
             carriers = intelipost.obter_transportadoras_api(api_token)
             margin_config = intelipost.obter_configuracao_margem_api(api_token)
-
-        # Envia a configuração da margem junto com os filtros
         queue_gui.put({
             "type": "filters_loaded",
             "token": api_token,
             "warehouses": warehouses,
             "carriers": carriers
         })
-        
-        # Envia uma mensagem separada para a margem
         if margin_config:
             queue_gui.put({"type": "margin_info", "config": margin_config})
         else:
-            # Envia uma config vazia ou de erro se não encontrar
              queue_gui.put({"type": "margin_info", "config": {}})
-
-
     except Exception as e:
         print(f"\nERRO: {e}")
         queue_gui.put({"type": "error", "title": "Erro na Preparação", "message": f"Ocorreu uma falha inesperada:\n\n{e}"})
@@ -164,48 +158,81 @@ def save_report_thread(queue_gui, data, final=True):
 def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, api_token, stop_event, q_control):
     start_time = time.time()
     lista_final_divergencias = []
-    total_pedidos_original = 0
+
     try:
         config_margem = intelipost.obter_configuracao_margem_api(api_token)
         if not config_margem:
-            queue_gui.put({"type": "error", "title": "Erro Crítico!", "message": 'Não foi possível obter a configuração da margem de tolerância da Intelipost.\n\nA auditoria não pode continuar.', "done": True})
+            raise ValueError("Não foi possível obter a configuração da margem.")
+
+        print("\nINFO: Buscando todas as pré-faturas auditáveis na API. Isso pode levar um tempo...")
+        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(
+            api_token,
+            data_inicio,
+            data_fim,
+            lista_ids_warehouses,
+            lista_ids_transportadoras,
+            stop_event
+        )
+
+        if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
+        if not pre_faturas_api:
+            queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhuma pré-fatura pronta para auditoria foi encontrada na Intelipost para o período.", "done": True})
             return
-        # A mensagem de margem já é enviada ao carregar os filtros, não precisa enviar de novo.
-        # queue_gui.put({"type": "margin_info", "config": config_margem}) 
-        df_pedidos = database.obter_pedidos_para_auditoria(client_id, data_inicio, data_fim, lista_ids_transportadoras)
-        total_pedidos_original = len(df_pedidos)
-        if df_pedidos.empty:
-            queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhum pedido encontrado.", "done": True})
-            return
-        print(f"\nINFO: Token obtido. Iniciando processamento de {total_pedidos_original} pedidos via API...")
-        pedidos_processados = 0
-        for _, pedido in df_pedidos.iterrows():
-            if stop_event.is_set():
-                print("\nINFO: Processo interrompido pelo usuário.")
-                break
-            pedidos_processados += 1
-            order_number = pedido['so_order_number']
-            transportadora_nome = pedido['lp_name']
-            print(f"--- Processando Pedido {pedidos_processados}/{total_pedidos_original}: {order_number} ({transportadora_nome}) ---")
-            chave_cte, valor_frete = intelipost.obter_dados_via_api_threaded(
-                str(order_number), api_token, data_inicio, data_fim, lista_ids_warehouses, stop_event
-            )
-            if stop_event.is_set():
-                break
-            if chave_cte and valor_frete is not None:
-                divergencia = comparator.encontrar_divergencias(pedido, valor_frete, chave_cte, transportadora_nome, config_margem)
-                if divergencia:
-                    lista_final_divergencias.append(divergencia)
-            else:
-                pass
-            time.sleep(0.01)
+
+        print(f"INFO: A API retornou {len(pre_faturas_api)} pré-faturas prontas para auditoria.")
+        
+        dados_api_list = []
+        for item in pre_faturas_api:
+            if item.get("invoice") and len(item["invoice"]) > 0:
+                order_number = item["invoice"][0].get("order_number")
+                if order_number:
+                    dados_api_list.append({
+                        "so_order_number": order_number,
+                        "chave_cte": item.get("cte", {}).get("key"),
+                        "valor_intelipost": item.get("cte_value")
+                    })
+        df_api = pd.DataFrame(dados_api_list)
+
+        lista_pedidos_api = df_api["so_order_number"].unique().tolist()
+        df_pedidos_db = database.obter_dados_de_pedidos_especificos(client_id, lista_pedidos_api)
+        if df_pedidos_db.empty:
+            raise ValueError("Nenhum dos pedidos encontrados na API corresponde a um pedido no banco de dados.")
+
+        if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
+
+        print("INFO: Unindo dados da API e do Banco de Dados...")
+        df_pedidos_db['so_order_number'] = df_pedidos_db['so_order_number'].astype(str)
+        df_api['so_order_number'] = df_api['so_order_number'].astype(str)
+        
+        df_merged = pd.merge(df_pedidos_db, df_api, on="so_order_number", how="inner")
+        
+        if df_merged.empty:
+            raise ValueError("Falha ao unir os dados da API e do banco de dados.")
+
+        total_pedidos_para_auditar = len(df_merged)
+        print(f"INFO: {total_pedidos_para_auditar} pedidos prontos para comparação. Iniciando processamento vectorizado...")
+        queue_gui.put({"type": "progress_update", "current": 0, "total": total_pedidos_para_auditar})
+        
+        df_merged['config_margem'] = [config_margem] * total_pedidos_para_auditar
+        
+        resultados = df_merged.apply(comparator.encontrar_divergencias, axis=1)
+        
+        lista_final_divergencias = resultados.dropna().tolist()
+        
+        queue_gui.put({"type": "progress_update", "current": total_pedidos_para_auditar, "total": total_pedidos_para_auditar})
+        print(f"SUCESSO: Comparação vectorizada concluída. {len(lista_final_divergencias)} divergências encontradas.")
+
+    except InterruptedError:
+        print("\nINFO: Processo interrompido pelo usuário.")
     except Exception as e:
         print(f"\nERRO CRÍTICO NA THREAD DE AUDITORIA: {e}")
         queue_gui.put({"type": "error", "title": "Erro Crítico!", "message": f'Erro inesperado:\n\n{e}', "done": True})
         return
     finally:
         duration_seconds = time.time() - start_time
-        data_para_salvar = (lista_final_divergencias, client_id, total_pedidos_original, duration_seconds)
+        total_pedidos_auditados = len(df_merged) if 'df_merged' in locals() else 0
+        data_para_salvar = (lista_final_divergencias, client_id, total_pedidos_auditados, duration_seconds)
+        
         if stop_event.is_set():
             if lista_final_divergencias:
                 queue_gui.put({"type": "ask_save", "data": data_para_salvar})
@@ -246,7 +273,7 @@ if __name__ == "__main__":
                             gui_q, message["client_id"], message["start_date"], 
                             message["end_date"], message["carrier_ids"], 
                             message["warehouse_ids"], message["api_token"], stop_event,
-                            ctrl_q  # Passa a fila de controle
+                            ctrl_q
                         ),
                         daemon=True)
                     automation_thread.start()

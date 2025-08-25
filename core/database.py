@@ -22,7 +22,13 @@ def criar_conexao():
         print(f"ERRO CRÍTICO: Não foi possível conectar ao banco de dados. Detalhe: {e}")
         return None
 
-def obter_pedidos_para_auditoria(client_id: int, data_inicio: str, data_fim: str, lista_ids_transportadoras: list):
+def obter_dados_de_pedidos_especificos(client_id: int, lista_order_numbers: list) -> pd.DataFrame:
+    """
+    Busca no banco de dados as informações para uma lista específica de números de pedido.
+    """
+    if not lista_order_numbers:
+        return pd.DataFrame()
+
     query = """
         SELECT
             so.so_order_number,
@@ -36,18 +42,17 @@ def obter_pedidos_para_auditoria(client_id: int, data_inicio: str, data_fim: str
             ON lp.lp_id = dm.dm_logistic_provider_id
         WHERE
             so.so_client_id = %s
-            AND so.so_created BETWEEN %s AND %s
-            AND lp.lp_id IN %s;
+            AND so.so_order_number IN %s;
     """
-    params = (client_id, data_inicio, data_fim, tuple(lista_ids_transportadoras))
+    params = (client_id, tuple(lista_order_numbers))
     conn = criar_conexao()
     if not conn: return pd.DataFrame()
     try:
-        print(f"INFO: Buscando pedidos para o cliente {client_id} e {len(lista_ids_transportadoras)} transportadoras.")
+        print(f"INFO (DB): Buscando dados de {len(lista_order_numbers)} pedidos específicos no banco de dados.")
         df = pd.read_sql_query(query, conn, params=params)
         return df
     except Exception as e:
-        print(f"ERRO: Falha ao obter pedidos do banco de dados. Detalhe: {e}")
+        print(f"ERRO (DB): Falha ao obter pedidos específicos do banco de dados. Detalhe: {e}")
         return pd.DataFrame()
     finally:
         if conn: conn.close()

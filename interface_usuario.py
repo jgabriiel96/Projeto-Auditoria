@@ -119,6 +119,7 @@ class App:
         canvas_carrier.configure(yscrollcommand=scrollbar_carrier.set)
         canvas_carrier.grid(row=1, column=0, sticky="nsew")
         scrollbar_carrier.grid(row=1, column=1, sticky="ns")
+
         log_frame = ttk.LabelFrame(main_frame, text="Log de Execução", padding="10")
         log_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
         log_frame.columnconfigure(0, weight=1)
@@ -128,8 +129,21 @@ class App:
         log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         log_scrollbar.grid(row=0, column=1, sticky="ns")
         self.log_text.config(yscrollcommand=log_scrollbar.set)
-        self.timer_label = ttk.Label(log_frame, text="Tempo de Execução: 00:00:00")
-        self.timer_label.grid(row=1, column=0, sticky="w", pady=(5,0), padx=5)
+        
+        status_frame = ttk.Frame(log_frame)
+        status_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5,0), padx=5)
+        status_frame.columnconfigure(1, weight=1)
+        
+        self.timer_label = ttk.Label(status_frame, text="Tempo de Execução: 00:00:00")
+        self.timer_label.grid(row=0, column=0, sticky="w")
+        
+        self.progress_label = ttk.Label(status_frame, text="")
+        self.progress_label.grid(row=0, column=1, sticky="e")
+
+        self.progress_bar = ttk.Progressbar(log_frame, orient='horizontal', mode='determinate')
+        self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(2,0), padx=5)
+        self.progress_bar.grid_remove()
+
         action_btn_frame = ttk.Frame(main_frame)
         action_btn_frame.grid(row=3, column=0, pady=10, padx=5, sticky="e")
         self.start_button = ttk.Button(action_btn_frame, text="Iniciar Auditoria", command=self.start_audit)
@@ -248,6 +262,11 @@ class App:
         if not is_valid:
             messagebox.showerror("Erro de Validação", error_message)
             return
+
+        self.progress_bar.grid()
+        self.progress_bar['value'] = 0
+        self.progress_label.config(text="0.0% | ETA: Calculando...")
+
         client_id = int(self.client_id_entry.get())
         start_date = self.start_date_entry.get()
         end_date = self.end_date_entry.get()
@@ -299,6 +318,11 @@ class App:
         self.btn_desmarcar_carrier.config(state=new_state)
         for child in self.scrollable_frame_wh.winfo_children(): child.configure(state=new_state)
         for child in self.scrollable_frame_carrier.winfo_children(): child.configure(state=new_state)
+        
+        if not is_running:
+            self.progress_bar.grid_remove()
+            self.progress_label.config(text="")
+            
         if is_running:
             self.start_button.pack_forget()
             self.stop_button.pack(side="right", padx=(0, 5))
@@ -348,13 +372,35 @@ class App:
         for item in var_dict.values():
             item['var'].set(marcar)
 
+    def _update_progress(self, current: int, total: int):
+        if total > 0:
+            percent = (current / total) * 100
+            self.progress_bar['value'] = percent
+            
+            eta_str = "--:--"
+            if current > 0 and self.start_time:
+                elapsed_time = time.time() - self.start_time
+                time_per_item = elapsed_time / current
+                remaining_items = total - current
+                eta_seconds = time_per_item * remaining_items
+                
+                if eta_seconds > 3600:
+                    eta_str = time.strftime("%H:%M:%S", time.gmtime(eta_seconds))
+                else:
+                    eta_str = time.strftime("%M:%S", time.gmtime(eta_seconds))
+
+            self.progress_label.config(text=f"{percent:.1f}% ({current}/{total}) | ETA: {eta_str}")
+
     def process_gui_queue(self):
         try:
             message = self.queue_gui.get_nowait()
             if isinstance(message, dict):
                 msg_type = message.get("type")
                 
-                if msg_type == "filters_loaded":
+                if msg_type == "progress_update":
+                    self._update_progress(message["current"], message["total"])
+
+                elif msg_type == "filters_loaded":
                     self.update_log("INFO: Recebendo dados de filtros do backend...\n")
                     self._update_ui_state(False)
                     self.api_token = message["token"]

@@ -4,13 +4,8 @@ import gspread
 import os
 from datetime import datetime
 import pandas as pd
-import time
 
 def get_sheets_client():
-    """
-    Função de autenticação ATUALIZADA para usar o método moderno
-    e recomendado pelo Google, evitando erros com bibliotecas descontinuadas.
-    """
     return gspread.service_account(filename='credentials.json')
 
 def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_email: str):
