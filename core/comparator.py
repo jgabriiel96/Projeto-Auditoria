@@ -5,14 +5,18 @@ def encontrar_divergencias(row):
     Recebe uma linha de um DataFrame Pandas contendo dados mesclados da API e do banco de dados,
     e retorna um dicionário de divergência se houver uma.
     """
-    config_margem = row['config_margem']
-    valor_intelipost = row.get('valor_intelipost')
-    custo_db = row['so_provider_shipping_costs']
+    try:
+        custo_db = float(row['so_provider_shipping_costs'])
+        valor_intelipost = float(row.get('valor_intelipost'))
 
+    except (ValueError, TypeError):
+        return None
+
+    config_margem = row['config_margem']
     limite_tolerancia = 0.0
     margem_formatada = "N/A"
 
-    if config_margem and valor_intelipost is not None:
+    if config_margem:
         margem_type = config_margem.get('type')
 
         if margem_type == 'ABSOLUTE':
@@ -33,30 +37,27 @@ def encontrar_divergencias(row):
             limite_percentual = round(valor_intelipost * (percentage_val / 100.0), 2)
             limite_tolerancia = max(limite_absoluto, limite_percentual)
             margem_formatada = (f"Dinâmico (Maior entre R$ {limite_absoluto:.2f} e "
-                              f"{percentage_val}% = R$ {limite_percentual:.2f}) -> "
-                              f"Aplicado: R$ {limite_tolerancia:.2f}")
+                                f"{percentage_val}% = R$ {limite_percentual:.2f}) -> "
+                                f"Aplicado: R$ {limite_tolerancia:.2f}")
 
-    if valor_intelipost is not None:
-        diferenca_numerica = round(custo_db - valor_intelipost, 2)
+    diferenca_numerica = round(custo_db - valor_intelipost, 2)
 
-        if abs(diferenca_numerica) > limite_tolerancia:
-            if diferenca_numerica > 0:
-                status_conferencia = "Custo no pedido superior ao do SEFAZ"
-            else:
-                status_conferencia = "Custo no pedido inferior ao do SEFAZ"
+    if abs(diferenca_numerica) > limite_tolerancia:
+        if diferenca_numerica > 0:
+            status_conferencia = "Custo no pedido superior ao do SEFAZ"
+        else:
+            status_conferencia = "Custo no pedido inferior ao do SEFAZ"
 
-            # Monta o dicionário de divergência
-            return {
-                'id_pedido': row['so_order_number'],
-                'chave_acesso': row['chave_cte'],
-                'margem_aplicada': margem_formatada,
-                'transportadora': row['lp_name'],
-                'valor_banco': custo_db,
-                'valor_intelipost': valor_intelipost,
-                'diferenca_valor': diferenca_numerica,
-                'status': status_conferencia,
-                'campo': 'Custo'
-            }
+        return {
+            'id_pedido': row['so_order_number'],
+            'chave_acesso': row['chave_cte'],
+            'margem_aplicada': margem_formatada,
+            'transportadora': row['lp_name'],
+            'valor_banco': custo_db,
+            'valor_intelipost': valor_intelipost,
+            'diferenca_valor': diferenca_numerica,
+            'status': status_conferencia,
+            'campo': 'Custo'
+        }
 
-    # Retorna None se não houver divergência
     return None

@@ -20,6 +20,7 @@ import psutil
 import socket
 import pandas as pd
 
+# ... (Logger, _get_browser_paths, is_port_in_use, kill_browser_processes, carregar_filtros_thread, save_report_thread permanecem inalteradas) ...
 class Logger:
     def __init__(self, queue_gui, terminal_original):
         self.queue = queue_gui
@@ -64,6 +65,7 @@ def kill_browser_processes(exec_name: str):
                 pass
 
 def carregar_filtros_thread(queue_gui, client_id):
+    # (Código inalterado)
     driver = None
     try:
         config = configparser.ConfigParser()
@@ -134,6 +136,7 @@ def carregar_filtros_thread(queue_gui, client_id):
             print("\nINFO: Processo de coleta de dados finalizado. O navegador permanecerá aberto.")
 
 def save_report_thread(queue_gui, data, final=True):
+    # (Código inalterado)
     try:
         lista_divergencias, client_id, start_date, end_date, total_pedidos, duration_seconds = data
         config = configparser.ConfigParser()
@@ -171,10 +174,11 @@ def save_report_thread(queue_gui, data, final=True):
         print(f"\nERRO NA THREAD DE SALVAMENTO: {e}")
         queue_gui.put({"type": "error", "title": "Erro ao Salvar", "message": f"Falha ao salvar o relatório:\n\n{e}", "done": True})
 
+
 def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, api_token, stop_event, q_control):
     start_time = time.time()
     lista_final_divergencias = []
-    df_merged = pd.DataFrame() # Define o df no escopo mais amplo
+    df_merged = pd.DataFrame()
 
     try:
         config_margem = intelipost.obter_configuracao_margem_api(api_token)
@@ -201,7 +205,8 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
                     dados_api_list.append({
                         "so_order_number": order_number,
                         "chave_cte": item.get("cte", {}).get("key"),
-                        "valor_intelipost": item.get("cte_value")
+                        "valor_intelipost": item.get("cte_value"),
+                        "tms_value": item.get("tms_value")  # Capturando o valor de recotação
                     })
         df_api = pd.DataFrame(dados_api_list)
 
@@ -222,6 +227,13 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         
         df_merged = pd.merge(df_pedidos_db, df_api, on="so_order_number", how="inner")
         
+        # --- LÓGICA DE FALLBACK (RECOTAÇÃO) ---
+        # Preenche os custos nulos do banco de dados com o 'tms_value' (recotação) da API.
+        print("INFO: Aplicando regra de negócio de recotação para custos não encontrados no banco de dados...")
+        df_merged['so_provider_shipping_costs'] = df_merged['so_provider_shipping_costs'].fillna(df_merged['tms_value'])
+        df_merged = df_merged.drop(columns=['tms_value']) # Limpa a coluna auxiliar
+        # --- FIM DA LÓGICA DE FALLBACK ---
+
         if df_merged.empty:
             raise ValueError("Falha ao unir os dados da API e do banco de dados.")
 
@@ -258,12 +270,12 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             else:
                 q_control.put({"action": "finish_stop"})
         else:
-            # Envia os dados para a thread de salvamento, que agora gerencia todos os popups finais
             q_control.put({"action": "save_report", "data": data_para_salvar})
         if not stop_event.is_set():
             print("\nPROCESSO DE AUDITORIA FINALIZADO.")
 
 if __name__ == "__main__":
+    # (Código inalterado)
     q_gui = queue.Queue()
     q_control = queue.Queue()
     stop_event = threading.Event()

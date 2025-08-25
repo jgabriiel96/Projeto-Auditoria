@@ -2,7 +2,7 @@
 
 import time
 import requests
-import math # Importa a biblioteca de matemática para o cálculo do teto (ceil)
+import math
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
@@ -10,8 +10,10 @@ from selenium.webdriver.common.action_chains import ActionChains
 from core.utils import retry
 import threading
 
+# ... (funções preparar_pagina_e_capturar_token, obter_centros_de_distribuicao_api, obter_transportadoras_api permanecem inalteradas) ...
 @retry(tentativas=3, delay=5)
 def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
+    # (Código inalterado)
     original_window = None
     try:
         original_window = driver.current_window_handle
@@ -84,6 +86,7 @@ def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
                 print("INFO: Aba de trabalho fechada e foco retornado ao usuário.")
 
 def obter_centros_de_distribuicao_api(api_token: str) -> list:
+    # (Código inalterado)
     if not api_token: return []
     graphql_query = { "query": "{ warehouses { id official_name } }" }
     auth_token = api_token if api_token.lower().startswith('bearer ') else f'Bearer {api_token}'
@@ -100,6 +103,7 @@ def obter_centros_de_distribuicao_api(api_token: str) -> list:
         return []
 
 def obter_transportadoras_api(api_token: str) -> list:
+    # (Código inalterado)
     if not api_token: return []
     graphql_query = {
         "variables": {"active": False},
@@ -135,14 +139,20 @@ def obter_pre_faturas_prontas_por_data(
     total_paginas = 0
     
     query_string = """
-        query ($warehouses: [Int], $logistic_providers: [Int], $date_range: DateRangeInput, $page: Int, $limit: Int) {
+        query ($warehouses: [Int], $logistic_providers: [Int], $date_range: DateRangeInput, $page: Int, $limit: Int, $status: [String]) {
             preInvoicesV2(
                 warehouses: $warehouses, logistic_providers: $logistic_providers,
-                date_range: $date_range, page: $page, limit: $limit
+                date_range: $date_range, page: $page, limit: $limit, status: $status
             ) {
                 total
                 hasNextPage
-                items { cte { key }, invoice { order_number }, cte_value }
+                items {
+                    cte { key }
+                    invoice { order_number }
+                    cte_value
+                    tms_value 
+                    status
+                }
             }
         }
     """
@@ -152,18 +162,38 @@ def obter_pre_faturas_prontas_por_data(
 
     try:
         print("INFO (API Paginada): Calculando total de páginas...")
+
         variables = {
-            "warehouses": lista_ids_warehouses, "logistic_providers": lista_ids_transportadoras,
+            "warehouses": lista_ids_warehouses, 
+            "logistic_providers": lista_ids_transportadoras,
             "date_range": {"start": data_inicio_str, "end": data_fim_str},
-            "page": 1, "limit": 1
+            "status": ["AUDITABLE", "WAITING_FOR_CONCILIATION"],
+            "page": 1, 
+            "limit": 1
         }
+        
         response = requests.post("https://graphql.intelipost.com.br/", json={"query": query_string, "variables": variables}, headers=headers, timeout=180)
         response.raise_for_status()
-        data = response.json().get("data", {}).get("preInvoicesV2", {})
+        json_response = response.json()
+        
+        if "errors" in json_response and json_response["errors"]:
+             print(f"ERRO (API Paginada): A API GraphQL retornou erros: {json_response['errors']}")
+             return []
+
+        data = json_response.get("data", {}).get("preInvoicesV2", {})
         total_itens = data.get("total", 0)
+
         if total_itens > 0:
             total_paginas = math.ceil(total_itens / limite_por_pagina)
         print(f"INFO (API Paginada): {total_itens} itens encontrados, totalizando {total_paginas} páginas.")
+    
+    except requests.exceptions.HTTPError as http_err:
+        print(f"ERRO HTTP (API Paginada): Falha ao pré-calcular páginas. Status: {http_err.response.status_code}.")
+        try:
+            print(f"Detalhe do erro da API: {http_err.response.json()}")
+        except Exception:
+            print(f"Conteúdo da resposta (não-JSON): {http_err.response.text}")
+        return []
     except Exception as e:
         print(f"ERRO (API Paginada): Não foi possível pré-calcular o total de páginas. Detalhe: {e}")
         return []
@@ -178,6 +208,7 @@ def obter_pre_faturas_prontas_por_data(
             
         try:
             print(f"INFO (API Paginada): Buscando página {pagina_atual}/{total_paginas} (limite de {limite_por_pagina} itens)...")
+            
             variables['page'] = pagina_atual
             variables['limit'] = limite_por_pagina
             
@@ -203,6 +234,7 @@ def obter_pre_faturas_prontas_por_data(
     return todos_os_itens
 
 def obter_configuracao_margem_api(api_token: str) -> dict | None:
+    # (Código inalterado)
     if not api_token: return None
     graphql_query = {
         "operationName": None,
