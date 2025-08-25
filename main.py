@@ -135,14 +135,23 @@ def carregar_filtros_thread(queue_gui, client_id):
 
 def save_report_thread(queue_gui, data, final=True):
     try:
-        lista_divergencias, client_id, total_pedidos, duration_seconds = data
+        lista_divergencias, client_id, start_date, end_date, total_pedidos, duration_seconds = data
         config = configparser.ConfigParser()
         config.read('config.ini')
         recipient_email = config['SHEETS']['email_destinatario']
         sheet_name = f"Auditoria Frete - Cliente {client_id}"
-        url_planilha = sheets.reportar_divergencias(lista_divergencias, sheet_name, recipient_email)
-        if url_planilha:
-            sheets.criar_aba_sumario(sheet_name, total_pedidos, lista_divergencias)
+        
+        spreadsheet_url = sheets.reportar_divergencias(
+            lista_divergencias, sheet_name, client_id, start_date, end_date, recipient_email
+        )
+        
+        if spreadsheet_url:
+            gspread_client = sheets.get_sheets_client()
+            spreadsheet = gspread_client.open_by_url(spreadsheet_url)
+            df_divergencias = pd.DataFrame(lista_divergencias)
+            
+            sheets.criar_aba_sumario(spreadsheet, df_divergencias, total_pedidos)
+            
             formatted_duration = time.strftime("%M minutos e %S segundos", time.gmtime(duration_seconds))
             message = (f'{len(lista_divergencias)} divergências encontradas e reportadas.\n\n'
                        f'Tempo total da auditoria: {formatted_duration}\n\n'
@@ -153,7 +162,7 @@ def save_report_thread(queue_gui, data, final=True):
                 "type": "ask_open_sheet", 
                 "title": title, 
                 "message": message, 
-                "url": url_planilha, 
+                "url": spreadsheet_url, 
                 "done": True
             })
         else:
@@ -165,6 +174,7 @@ def save_report_thread(queue_gui, data, final=True):
 def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, api_token, stop_event, q_control):
     start_time = time.time()
     lista_final_divergencias = []
+    df_merged = pd.DataFrame() # Define o df no escopo mais amplo
 
     try:
         config_margem = intelipost.obter_configuracao_margem_api(api_token)
@@ -173,12 +183,7 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
 
         print("\nINFO: Buscando todas as pré-faturas auditáveis na API. Isso pode levar um tempo...")
         pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(
-            api_token,
-            data_inicio,
-            data_fim,
-            lista_ids_warehouses,
-            lista_ids_transportadoras,
-            stop_event
+            api_token, data_inicio, data_fim, lista_ids_warehouses, lista_ids_transportadoras, stop_event
         )
 
         if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
@@ -199,6 +204,10 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
                         "valor_intelipost": item.get("cte_value")
                     })
         df_api = pd.DataFrame(dados_api_list)
+
+        if df_api.empty:
+             queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhum número de pedido válido foi encontrado nos dados da API.", "done": True})
+             return
 
         lista_pedidos_api = df_api["so_order_number"].unique().tolist()
         df_pedidos_db = database.obter_dados_de_pedidos_especificos(client_id, lista_pedidos_api)
@@ -240,8 +249,8 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         formatted_duration = time.strftime("%H horas, %M minutos e %S segundos", time.gmtime(duration_seconds))
         print(f"\nINFO: Tempo total da auditoria: {formatted_duration}.")
         
-        total_pedidos_auditados = len(df_merged) if 'df_merged' in locals() else 0
-        data_para_salvar = (lista_final_divergencias, client_id, total_pedidos_auditados, duration_seconds)
+        total_pedidos_auditados = len(df_merged) if not df_merged.empty else 0
+        data_para_salvar = (lista_final_divergencias, client_id, data_inicio, data_fim, total_pedidos_auditados, duration_seconds)
         
         if stop_event.is_set():
             if lista_final_divergencias:
@@ -249,32 +258,10 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             else:
                 q_control.put({"action": "finish_stop"})
         else:
-            if lista_final_divergencias:
-                q_control.put({"action": "save_report", "data": data_para_salvar})
-            else:
-                # Se não houver divergências, também faz a pergunta para abrir a planilha (vazia)
-                message_final = "Nenhuma divergência encontrada.\n\nDeseja abrir a planilha mesmo assim?"
-                url_planilha_vazia = f"https://docs.google.com/spreadsheets/d/{os.getenv('GOOGLE_SHEET_TEMPLATE_ID', '')}" # Fallback para o template
-                # Tentativa de criar/obter a URL da planilha vazia
-                try:
-                    config = configparser.ConfigParser(); config.read('config.ini')
-                    sheet_name = f"Auditoria Frete - Cliente {client_id}"
-                    recipient_email = config['SHEETS']['email_destinatario']
-                    # A função reportar_divergencias pode retornar a URL mesmo com lista vazia
-                    url_planilha_vazia = sheets.reportar_divergencias([], sheet_name, recipient_email) or url_planilha_vazia
-                except Exception:
-                    pass
-                
-                queue_gui.put({
-                    "type": "ask_open_sheet", 
-                    "title": "Processo Finalizado!", 
-                    "message": message_final,
-                    "url": url_planilha_vazia,
-                    "done": True
-                })
+            # Envia os dados para a thread de salvamento, que agora gerencia todos os popups finais
+            q_control.put({"action": "save_report", "data": data_para_salvar})
         if not stop_event.is_set():
             print("\nPROCESSO DE AUDITORIA FINALIZADO.")
-
 
 if __name__ == "__main__":
     q_gui = queue.Queue()

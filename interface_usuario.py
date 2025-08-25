@@ -457,7 +457,8 @@ class App:
                 elif msg_type in ("info", "error"):
                     if msg_type == "info": messagebox.showinfo(message["title"], message["message"])
                     else: messagebox.showerror(message["title"], message["message"])
-                    if message.get("done"): self._update_ui_state(False)
+                    if message.get("done"):
+                        self._update_ui_state(False)
             
             else:
                 self.update_log(message)
