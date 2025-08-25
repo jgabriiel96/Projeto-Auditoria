@@ -1,4 +1,4 @@
-# core/sheets.py
+# core/sheets.py (Versão com Melhoria Visual)
 
 import gspread
 import os
@@ -8,8 +8,7 @@ import time
 import math
 import traceback
 
-# ... (todo o resto do arquivo sheets.py, que já está correto, permanece aqui)
-
+# --- CONFIGURAÇÕES DE ESTILO (PALETA INTELIPOST ATUALIZADA) ---
 COLORS = {
     "intelipost_dark_green": {"red": 0/255, "green": 95/255, "blue": 33/255},
     "intelipost_vibrant_green": {"red": 0/255, "green": 200/255, "blue": 0/255},
@@ -144,10 +143,15 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
         requests.append({'updateSheetProperties': {'properties': {'sheetId': sheet_id, 'gridProperties': {'frozenRowCount': 6}}, 'fields': 'gridProperties.frozenRowCount'}})
         requests.append({'setBasicFilter': {'filter': {'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': len(rows_to_add) + 6, 'startColumnIndex': 0, 'endColumnIndex': 9}}}})
         requests.append({'addBanding': {'bandedRange': {'range': {'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}, 'rowProperties': {'headerColor': COLORS['intelipost_dark_green'], 'firstBandColor': COLORS['white'], 'secondBandColor': COLORS['light_gray_background']}}}})
+        
+        # --- ALTERAÇÃO DE COR PARA INTUIÇÃO FINANCEIRA ---
+        # "superior" (bom para a empresa) -> VERDE
+        # "inferior" (ruim para a empresa) -> VERMELHO
         requests.extend([
-            {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'superior'}]}, 'format': {'backgroundColor': COLORS['light_red_background']}}}, 'index': 0}},
-            {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'inferior'}]}, 'format': {'backgroundColor': COLORS['light_green_background']}}}, 'index': 1}}
+            {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'superior'}]}, 'format': {'backgroundColor': COLORS['light_green_background']}}}, 'index': 0}},
+            {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'inferior'}]}, 'format': {'backgroundColor': COLORS['light_red_background']}}}, 'index': 1}}
         ])
+        
         requests.append({'autoResizeDimensions': {'dimensions': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 9}}})
         
         _execute_batch_update(spreadsheet, requests_body)
@@ -161,7 +165,7 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
         return None
 
 def criar_aba_sumario(spreadsheet, df_divergencias, total_pedidos_auditados):
-    # (Código inalterado)
+    # (O código desta função permanece inalterado)
     try:
         total_divergencias = len(df_divergencias)
         valor_pago_a_menos = abs(df_divergencias[df_divergencias['diferenca_valor'] < 0]['diferenca_valor'].sum()) if not df_divergencias.empty else 0
