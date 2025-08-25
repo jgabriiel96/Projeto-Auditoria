@@ -1,4 +1,4 @@
-# core/sheets.py (Versão com Melhoria Visual)
+# core/sheets.py (Versão com Ajuste Visual Final)
 
 import gspread
 import os
@@ -8,7 +8,7 @@ import time
 import math
 import traceback
 
-# --- CONFIGURAÇÕES DE ESTILO (PALETA INTELIPOST ATUALIZADA) ---
+# ... (O início do arquivo permanece o mesmo) ...
 COLORS = {
     "intelipost_dark_green": {"red": 0/255, "green": 95/255, "blue": 33/255},
     "intelipost_vibrant_green": {"red": 0/255, "green": 200/255, "blue": 0/255},
@@ -52,7 +52,6 @@ def _recreate_worksheet(spreadsheet, title, rows, cols):
 
     new_sheet.update_title(title)
     return new_sheet
-
 
 def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: int, start_date: str, end_date: str, recipient_email: str):
     try:
@@ -142,11 +141,18 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
         
         requests.append({'updateSheetProperties': {'properties': {'sheetId': sheet_id, 'gridProperties': {'frozenRowCount': 6}}, 'fields': 'gridProperties.frozenRowCount'}})
         requests.append({'setBasicFilter': {'filter': {'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': len(rows_to_add) + 6, 'startColumnIndex': 0, 'endColumnIndex': 9}}}})
-        requests.append({'addBanding': {'bandedRange': {'range': {'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}, 'rowProperties': {'headerColor': COLORS['intelipost_dark_green'], 'firstBandColor': COLORS['white'], 'secondBandColor': COLORS['light_gray_background']}}}})
         
-        # --- ALTERAÇÃO DE COR PARA INTUIÇÃO FINANCEIRA ---
-        # "superior" (bom para a empresa) -> VERDE
-        # "inferior" (ruim para a empresa) -> VERMELHO
+        # --- CORREÇÃO DE FORMATAÇÃO VISUAL ---
+        # A propriedade 'headerColor' foi removida. Agora, a formatação de cores alternadas
+        # não tratará mais a primeira linha de dados como um cabeçalho especial.
+        requests.append({'addBanding': {'bandedRange': {
+            'range': {'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}, 
+            'rowProperties': {
+                'firstBandColor': COLORS['white'], 
+                'secondBandColor': COLORS['light_gray_background']
+            }
+        }}})
+        
         requests.extend([
             {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'superior'}]}, 'format': {'backgroundColor': COLORS['light_green_background']}}}, 'index': 0}},
             {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': 9}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'inferior'}]}, 'format': {'backgroundColor': COLORS['light_red_background']}}}, 'index': 1}}
