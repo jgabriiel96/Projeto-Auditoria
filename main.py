@@ -1,4 +1,4 @@
-# main.py (Versão Final V2.10 - Correção de Escopo)
+# main.py
 
 import interface_usuario as gui
 from core import database, comparator, sheets, intelipost
@@ -20,7 +20,6 @@ import psutil
 import socket
 
 class Logger:
-    # (código original sem alterações)
     def __init__(self, queue_gui, terminal_original):
         self.queue = queue_gui
         self.terminal = terminal_original
@@ -31,7 +30,6 @@ class Logger:
         self.terminal.flush()
 
 def _get_browser_paths():
-    # (código original sem alterações)
     paths = {'chrome_exec': '', 'chrome_user_data': '', 'brave_exec': '', 'brave_user_data': ''}
     if sys.platform == 'win32':
         local_app_data = os.getenv('LOCALAPPDATA', '')
@@ -53,12 +51,10 @@ def _get_browser_paths():
     return paths
 
 def is_port_in_use(port: int):
-    # (código original sem alterações)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def kill_browser_processes(exec_name: str):
-    # (código original sem alterações)
     for proc in psutil.process_iter(['name', 'exe']):
         if proc.info['name'] == exec_name:
             try:
@@ -67,7 +63,6 @@ def kill_browser_processes(exec_name: str):
                 pass
 
 def carregar_filtros_thread(queue_gui, client_id):
-    # (código da V2.9 sem alterações)
     driver = None
     try:
         config = configparser.ConfigParser()
@@ -115,10 +110,28 @@ def carregar_filtros_thread(queue_gui, client_id):
         api_token = intelipost.preparar_pagina_e_capturar_token(driver, str(client_id))
         warehouses = []
         carriers = []
+        margin_config = None # Inicializa a config da margem
         if api_token:
             warehouses = intelipost.obter_centros_de_distribuicao_api(api_token)
             carriers = intelipost.obter_transportadoras_api(api_token)
-        queue_gui.put({ "type": "filters_loaded", "token": api_token, "warehouses": warehouses, "carriers": carriers })
+            margin_config = intelipost.obter_configuracao_margem_api(api_token)
+
+        # Envia a configuração da margem junto com os filtros
+        queue_gui.put({
+            "type": "filters_loaded",
+            "token": api_token,
+            "warehouses": warehouses,
+            "carriers": carriers
+        })
+        
+        # Envia uma mensagem separada para a margem
+        if margin_config:
+            queue_gui.put({"type": "margin_info", "config": margin_config})
+        else:
+            # Envia uma config vazia ou de erro se não encontrar
+             queue_gui.put({"type": "margin_info", "config": {}})
+
+
     except Exception as e:
         print(f"\nERRO: {e}")
         queue_gui.put({"type": "error", "title": "Erro na Preparação", "message": f"Ocorreu uma falha inesperada:\n\n{e}"})
@@ -127,7 +140,6 @@ def carregar_filtros_thread(queue_gui, client_id):
             print("\nINFO: Processo de coleta de dados finalizado. O navegador permanecerá aberto.")
 
 def save_report_thread(queue_gui, data, final=True):
-    # (código original sem alterações)
     try:
         lista_divergencias, client_id, total_pedidos, duration_seconds = data
         config = configparser.ConfigParser()
@@ -149,8 +161,7 @@ def save_report_thread(queue_gui, data, final=True):
         print(f"\nERRO NA THREAD DE SALVAMENTO: {e}")
         queue_gui.put({"type": "error", "title": "Erro ao Salvar", "message": f"Falha ao salvar o relatório:\n\n{e}", "done": True})
 
-def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, api_token, stop_event):
-    # (código original sem alterações)
+def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, api_token, stop_event, q_control):
     start_time = time.time()
     lista_final_divergencias = []
     total_pedidos_original = 0
@@ -159,7 +170,8 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         if not config_margem:
             queue_gui.put({"type": "error", "title": "Erro Crítico!", "message": 'Não foi possível obter a configuração da margem de tolerância da Intelipost.\n\nA auditoria não pode continuar.', "done": True})
             return
-        queue_gui.put({"type": "margin_info", "config": config_margem})
+        # A mensagem de margem já é enviada ao carregar os filtros, não precisa enviar de novo.
+        # queue_gui.put({"type": "margin_info", "config": config_margem}) 
         df_pedidos = database.obter_pedidos_para_auditoria(client_id, data_inicio, data_fim, lista_ids_transportadoras)
         total_pedidos_original = len(df_pedidos)
         if df_pedidos.empty:
@@ -217,12 +229,9 @@ if __name__ == "__main__":
     sys.stdout = Logger(q_gui, sys.__stdout__)
     automation_thread = None
     
-    # V2.10 - CORREÇÃO: A função agora recebe as filas como argumentos padrão para
-    # garantir o escopo correto e evitar o erro do Pylance.
     def control_queue_monitor(gui_q=q_gui, ctrl_q=q_control):
         global automation_thread
         try:
-            # Usa as referências passadas como argumento
             message = ctrl_q.get_nowait()
             action = message.get("action")
             
@@ -236,7 +245,8 @@ if __name__ == "__main__":
                         args=(
                             gui_q, message["client_id"], message["start_date"], 
                             message["end_date"], message["carrier_ids"], 
-                            message["warehouse_ids"], message["api_token"], stop_event
+                            message["warehouse_ids"], message["api_token"], stop_event,
+                            ctrl_q  # Passa a fila de controle
                         ),
                         daemon=True)
                     automation_thread.start()
@@ -246,7 +256,6 @@ if __name__ == "__main__":
                 final = not stop_event.is_set()
                 threading.Thread(target=save_report_thread, args=(gui_q, message["data"], final), daemon=True).start()
             elif action == "finish_stop":
-                # A linha que causava o erro agora usa a referência correta.
                 gui_q.put({"type": "info", "title": "Processo Interrompido", "message": "A auditoria foi parada pelo usuário.", "done": True})
         except queue.Empty:
             pass

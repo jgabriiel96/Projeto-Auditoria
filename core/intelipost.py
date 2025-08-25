@@ -1,4 +1,4 @@
-# core/intelipost.py (Versão Final V2.10 - Gerenciamento de Abas)
+# core/intelipost.py
 
 import time
 import requests
@@ -11,15 +11,12 @@ import threading
 
 @retry(tentativas=3, delay=5)
 def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
-    # V2.10 - Lógica de gerenciamento de abas para não interferir com o usuário
     original_window = None
     work_window = None
     
     try:
-        # V2.10 - Salva a janela/aba original do usuário
         original_window = driver.current_window_handle
         
-        # V2.10 - Abre uma nova aba dedicada para o trabalho do robô
         driver.switch_to.new_window('tab')
         work_window = driver.current_window_handle
         print("INFO: Nova aba de trabalho aberta para não interferir na navegação do usuário.")
@@ -29,7 +26,6 @@ def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
         
         driver.get(f"https://api-sysnode.intelipost.com.br/sysnode/edit_client?q={client_id}")
         
-        # A lógica de clique que abre a terceira aba (Intelipost) continua a mesma
         abas_antes_do_clique = set(driver.window_handles)
         print("INFO: Clicando no link de e-mail para ativar a sessão...")
         email_login_link_xpath = f"//td[normalize-space()='{client_id}']/following-sibling::td[1]/a"
@@ -49,10 +45,8 @@ def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
         wait.until(lambda d: len(set(d.window_handles) - abas_antes_do_clique) > 0)
         nova_aba_intelipost = (set(driver.window_handles) - abas_antes_do_clique).pop()
         
-        # V2.10 - O robô fecha a aba intermediária do sysnode que não é mais necessária
         driver.close() 
         
-        # V2.10 - E foca na aba final da Intelipost que foi aberta pelo clique
         driver.switch_to.window(nova_aba_intelipost)
         print("INFO: Foco alterado para a aba da Intelipost.")
 
@@ -99,21 +93,16 @@ def preparar_pagina_e_capturar_token(driver, client_id: str) -> str | None:
         raise e
         
     finally:
-        # V2.10 - Bloco de limpeza: fecha a aba da Intelipost e retorna para a aba original do usuário
         if driver:
-            # Garante que estamos na aba correta antes de fechar para não fechar a do usuário por engano
             current_handle = driver.current_window_handle
             if current_handle != original_window:
                 driver.close()
             
-            # Devolve o foco para a janela original do usuário
             if original_window and original_window in driver.window_handles:
-                 driver.switch_to.window(original_window)
-                 print("INFO: Aba de trabalho fechada e foco retornado ao usuário.")
+                   driver.switch_to.window(original_window)
+                   print("INFO: Aba de trabalho fechada e foco retornado ao usuário.")
 
 
-# O restante do arquivo (funções de API) permanece o mesmo da V2.5
-# ... (código de obter_centros_de_distribuicao_api, obter_transportadoras_api, etc. sem alterações)
 def obter_centros_de_distribuicao_api(api_token: str) -> list:
     if not api_token: return []
     graphql_query = { "query": "{ warehouses { id official_name } }" }
@@ -202,36 +191,75 @@ def obter_dados_via_api_threaded(order_number: str, api_token: str, data_inicio_
 
 def obter_configuracao_margem_api(api_token: str) -> dict | None:
     if not api_token: return None
+    
+    # A query agora inclui todos os campos de margem possíveis conforme especificado
     graphql_query = {
         "operationName": None,
         "variables": {},
-        "query": "{\n  reconConfig {\n    marginType\n    marginFixedValue\n    marginPercentageValue\n  }\n}\n"
+        "query": """{
+            reconConfig {
+                marginType
+                marginFixedValue
+                marginPercentageValue
+                marginMixedFixedValue
+                marginMixedPercentageValue
+            }
+        }"""
     }
+    
     auth_token = api_token if api_token.lower().startswith('bearer ') else f'Bearer {api_token}'
     headers = {"Authorization": auth_token, "Content-Type": "application/json", "Origin": "https://secure.intelipost.com.br", "Referer": "https://secure.intelipost.com.br/"}
+    
     try:
-        print("INFO (API V2): Buscando configuração da margem de tolerância...")
+        print("INFO (API): Buscando configuração da margem de tolerância...")
         response = requests.post("https://graphql.intelipost.com.br/", json=graphql_query, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
+        
         recon_config = data.get("data", {}).get("reconConfig")
-        if not recon_config:
-            print("ERRO (API V2): Estrutura 'reconConfig' não encontrada na resposta da API.")
+        if recon_config is None: # Checa por None explicitamente
+            print("ERRO (API): Estrutura 'reconConfig' não encontrada ou nula na resposta da API.")
             return None
+            
         margin_type = recon_config.get("marginType")
         config_margem = {}
-        if margin_type == "ABSOLUTE":
+        
+        # 1) Trata o caso de Padrão do Sistema (1%), onde marginType é null
+        if margin_type is None:
+            config_margem['type'] = "SYSTEM_DEFAULT"
+            print("SUCESSO (API): Margem configurada como Padrão do Sistema (1%), pois 'marginType' é nulo.")
+
+        # 2) Trata o caso de Valor Fixo
+        elif margin_type == "ABSOLUTE":
             config_margem['type'] = "ABSOLUTE"
             config_margem['value'] = recon_config.get("marginFixedValue", 0.0)
-            print(f"SUCESSO (API V2): Margem configurada como valor FIXO de R$ {config_margem['value']}.")
+            print(f"SUCESSO (API): Margem configurada como valor FIXO de R$ {config_margem['value']}.")
+        
+        # 3) Trata o caso de Porcentagem
         elif margin_type == "PERCENTAGE":
             config_margem['type'] = "PERCENTAGE"
             config_margem['value'] = recon_config.get("marginPercentageValue", 0.0)
-            print(f"SUCESSO (API V2): Margem configurada como PERCENTUAL de {config_margem['value']}%.")
+            print(f"SUCESSO (API): Margem configurada como PERCENTUAL de {config_margem['value']}%.")
+        
+        # 4) Trata o caso da Escolha Dinâmica (misto)
+        elif margin_type == "MIXED_GREATER":
+            absolute_val = recon_config.get("marginMixedFixedValue", 0.0)
+            percentage_val = recon_config.get("marginMixedPercentageValue", 0.0)
+            
+            # Mapeia para a nossa estrutura interna consistente
+            config_margem = {
+                'type': 'DYNAMIC_CHOICE',
+                'absolute_value': absolute_val,
+                'percentage_value': percentage_val
+            }
+            print(f"SUCESSO (API): Margem configurada como Dinâmica (Maior entre R$ {absolute_val} e {percentage_val}%).")
+            
         else:
-            print(f"AVISO (API V2): Tipo de margem desconhecido ou não definido ('{margin_type}').")
-            return None
+            print(f"AVISO (API): Tipo de margem desconhecido ou não suportado ('{margin_type}').")
+            return None # Retorna None se o tipo não for reconhecido
+            
         return config_margem
+        
     except Exception as e:
-        print(f"ERRO (API V2): Falha ao buscar configuração da margem. Detalhe: {e}")
+        print(f"ERRO (API): Falha ao buscar configuração da margem. Detalhe: {e}")
         return None

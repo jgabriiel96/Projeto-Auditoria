@@ -1,20 +1,14 @@
-# interface_usuario.py (V2.20 - Seletor de Data Customizado)
+# interface_usuario.py
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
-from tkcalendar import Calendar # ALTERADO: Agora importamos o Calendar, não o DateEntry
+from tkcalendar import Calendar
 import queue
 import time
 import re
 
 class App:
-    """
-    Classe principal que encapsula toda a interface gráfica (GUI) da aplicação
-    de auditoria de frete. Gerencia os widgets, a interação com o usuário
-    e a comunicação com a thread de controle (backend).
-    """
-    
     def __init__(self, root, queue_gui, queue_control):
         self.root = root
         self.queue_gui = queue_gui
@@ -29,7 +23,6 @@ class App:
         self.vars_transportadoras = {}
         self.vars_warehouses = {}
         
-        # NOVO: Variável para rastrear a janela do calendário
         self.calendar_window = None
         
         s = ttk.Style()
@@ -38,7 +31,6 @@ class App:
         self.create_widgets()
         self.process_gui_queue()
         
-        # NOVO: Bind para fechar o calendário ao clicar em qualquer lugar
         self.root.bind("<Button-1>", self._close_calendar_if_open)
 
     def create_widgets(self):
@@ -63,20 +55,16 @@ class App:
         self.update_button = ttk.Button(self.params_frame, text="Atualizar Filtros", command=lambda: self._carregar_filtros(force_refresh=True))
         self.update_button.grid(row=0, column=2, sticky="e", padx=(0, 5))
         
-        # --- LÓGICA DE DATA TOTALMENTE REFEITA ---
-
-        # Data Início
         ttk.Label(self.params_frame, text="Data Início (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         start_date_frame = ttk.Frame(self.params_frame)
         start_date_frame.grid(row=1, column=1, columnspan=2, sticky="ew")
         self.start_date_entry = ttk.Entry(start_date_frame)
         self.start_date_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
-        start_cal_button = ttk.Button(start_date_frame, text="📅", width=3, 
+        start_cal_button = ttk.Button(start_date_frame, text="📅", width=3,
                                       command=lambda: self._open_calendar(self.start_date_entry))
         start_cal_button.pack(side="left")
         self.start_date_entry.bind("<KeyRelease>", self._on_date_change)
 
-        # Data Fim
         ttk.Label(self.params_frame, text="Data Fim (YYYY-MM-DD):").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         end_date_frame = ttk.Frame(self.params_frame)
         end_date_frame.grid(row=2, column=1, columnspan=2, sticky="ew")
@@ -87,13 +75,9 @@ class App:
         end_cal_button.pack(side="left")
         self.end_date_entry.bind("<KeyRelease>", self._on_date_change)
         
-        # --- FIM DA LÓGICA DE DATA ---
-
-        self.margin_label = ttk.Label(self.params_frame, text="Margem de Tolerância: (Aguardando auditoria)")
+        self.margin_label = ttk.Label(self.params_frame, text="Margem de Tolerância: (Aguardando cliente)")
         self.margin_label.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=(10, 5))
         
-        # O resto da criação de widgets continua igual
-        # ... (código dos filtros, log, etc., sem alterações)
         filters_frame = ttk.LabelFrame(main_frame, text="Filtros Obrigatórios", padding="10")
         filters_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         filters_frame.columnconfigure(0, weight=1)
@@ -154,75 +138,45 @@ class App:
         self.stop_button.pack(side="right", padx=(0, 5))
         self._update_ui_state(False)
 
-    # --- NOVOS MÉTODOS PARA O CALENDÁRIO CUSTOMIZADO ---
     def _open_calendar(self, entry_widget):
-        """Cria e posiciona a janela pop-up do calendário."""
-        self._close_calendar_if_open() # Garante que apenas um calendário esteja aberto
-
-        # Posição do widget de entrada de data
+        self._close_calendar_if_open() 
         x = entry_widget.winfo_rootx()
         y = entry_widget.winfo_rooty() + entry_widget.winfo_height()
-
-        # Cria a janela pop-up (Toplevel)
         self.calendar_window = tk.Toplevel(self.root)
-        self.calendar_window.wm_overrideredirect(True) # Remove a barra de título
-        self.calendar_window.wm_geometry(f"+{x}+{y}") # Posiciona o pop-up
-        
-        # Tenta pré-selecionar a data que já está no campo de texto
+        self.calendar_window.wm_overrideredirect(True) 
+        self.calendar_window.wm_geometry(f"+{x}+{y}")
         try:
             current_date = datetime.strptime(entry_widget.get(), '%Y-%m-%d')
         except ValueError:
             current_date = datetime.now()
-
-        # Cria o widget do calendário dentro do pop-up
         earliest_date = datetime.now() - timedelta(days=90)
         cal = Calendar(self.calendar_window, selectmode='day', date_pattern='y-mm-dd',
                        year=current_date.year, month=current_date.month, day=current_date.day,
                        mindate=earliest_date, maxdate=datetime.now())
         cal.pack()
-
-        # Define o que acontece quando uma data é selecionada
         cal.bind("<<CalendarSelected>>", lambda event: self._on_date_selected(event, entry_widget))
-        
-        # Impede que o clique DENTRO do calendário feche o pop-up
         self.calendar_window.bind("<Button-1>", lambda event: "break")
-
+    
     def _on_date_selected(self, event, entry_widget):
-        """Atualiza o campo de texto com a data selecionada e fecha o calendário."""
         widget = event.widget
         selected_date = widget.get_date()
-        
         entry_widget.delete(0, tk.END)
         entry_widget.insert(0, selected_date)
-        
         self._close_calendar_if_open()
-        self._validate_all_fields() # Valida os campos após a seleção
-
+        self._validate_all_fields()
+    
     def _close_calendar_if_open(self, event=None):
-        """Fecha a janela do calendário se ela estiver aberta."""
         if self.calendar_window:
             self.calendar_window.destroy()
             self.calendar_window = None
-
-    # --------------------------------------------------------------------------
     
-    # MÉTODO CORRIGIDO
     def _on_date_change(self, event):
-        """Formata o texto da data enquanto o usuário digita."""
         widget = event.widget
-
-        # Se o usuário está apagando, apenas validamos e não reformatamos.
         if event.keysym in ('BackSpace', 'Delete'):
             self._validate_all_fields()
             return
-
-        # Pega o texto atual ANTES de qualquer mudança.
         current_text = widget.get()
-        
-        # Remove tudo que não for dígito e limita a 8.
         digits_only = re.sub(r'\D', '', current_text)[:8]
-        
-        # Reconstrói a string formatada.
         formatted_text = ""
         if len(digits_only) > 0:
             formatted_text += digits_only[:4]
@@ -230,42 +184,28 @@ class App:
             formatted_text += '-' + digits_only[4:6]
         if len(digits_only) > 6:
             formatted_text += '-' + digits_only[6:8]
-        
-        # Apenas atualiza o widget se a formatação realmente mudou o texto.
-        # Isso evita que o cursor se mova desnecessariamente.
         if formatted_text != current_text:
             widget.delete(0, tk.END)
             widget.insert(0, formatted_text)
-            
-            # CORREÇÃO PRINCIPAL:
-            # Coloca o cursor sempre no final após a auto-formatação.
-            # Este é o comportamento mais previsível e corrige o bug.
             widget.icursor(tk.END)
-            
         self._validate_all_fields()
-
+    
     def _validate_all_fields(self, *args):
-        # ALTERADO: Usa strptime pois agora temos um Entry padrão
         self.start_date_entry.config(style='TEntry')
         self.end_date_entry.config(style='TEntry')
-
         client_id_ok = self.client_id_entry.get().isdigit()
-        
         start_date_obj, end_date_obj = None, None
         dates_ok = False
-
         try:
             start_date_obj = datetime.strptime(self.start_date_entry.get(), '%Y-%m-%d').date()
         except (ValueError, TypeError):
             if self.start_date_entry.get() != "":
                 self.start_date_entry.config(style='Invalid.TEntry')
-        
         try:
             end_date_obj = datetime.strptime(self.end_date_entry.get(), '%Y-%m-%d').date()
         except (ValueError, TypeError):
             if self.end_date_entry.get() != "":
                 self.end_date_entry.config(style='Invalid.TEntry')
-
         if start_date_obj and end_date_obj:
             if end_date_obj < start_date_obj:
                 self.end_date_entry.config(style='Invalid.TEntry')
@@ -273,47 +213,35 @@ class App:
                 self.start_date_entry.config(style='Invalid.TEntry')
             else:
                 dates_ok = True
-
         carrier_ok = any(item['var'].get() for item in self.vars_transportadoras.values())
         warehouse_ok = any(item['var'].get() for item in self.vars_warehouses.values())
-        
         if client_id_ok and dates_ok and carrier_ok and warehouse_ok and self.api_token:
             self.start_button.config(state="normal")
         else:
             self.start_button.config(state="disabled")
 
     def run_final_validation(self):
-        # ALTERADO: Usa strptime
         try:
             start_date = datetime.strptime(self.start_date_entry.get(), '%Y-%m-%d').date()
             end_date = datetime.strptime(self.end_date_entry.get(), '%Y-%m-%d').date()
-            
             if end_date < start_date:
                 return False, "A 'Data Fim' não pode ser anterior à 'Data Início'."
-            
             earliest_date = (datetime.now() - timedelta(days=90)).date()
             if start_date < earliest_date:
                 return False, f"O período de auditoria não pode começar antes de {earliest_date.strftime('%d/%m/%Y')} (limite de 90 dias)."
-
         except (ValueError, TypeError):
-             return False, "O formato de uma das datas é inválido. Use YYYY-MM-DD."
-
+                 return False, "O formato de uma das datas é inválido. Use YYYY-MM-DD."
         if not self.client_id_entry.get().isdigit():
             return False, "O ID do Cliente é inválido."
         if not any(item['var'].get() for item in self.vars_warehouses.values()):
             return False, "Selecione ao menos um Centro de Distribuição."
         if not any(item['var'].get() for item in self.vars_transportadoras.values()):
             return False, "Selecione ao menos uma Transportadora."
-        
         return True, ""
 
     def validate_number(self, P):
         return P.isdigit() or P == ""
-        
-    # As seções 4, 5 e 6 (Lógica de Ações, Métodos Auxiliares e Comunicação)
-    # permanecem exatamente iguais ao código anterior.
-    # start_audit, stop_audit, process_gui_queue, etc. não precisam de alteração.
-    # ... (cole aqui o restante do código da versão anterior)
+    
     def start_audit(self):
         if self.is_running: return
         is_valid, error_message = self.run_final_validation()
@@ -335,10 +263,12 @@ class App:
             "action": "start", "client_id": client_id, "start_date": start_date, "end_date": end_date,
             "carrier_ids": selected_carrier_ids, "warehouse_ids": selected_warehouse_ids, "api_token": self.api_token
         })
+
     def stop_audit(self):
         print("\nAVISO: Solicitação de parada enviada. Finalizando o pedido atual...")
         self.stop_button.config(text="Parando...", state="disabled")
         self.queue_control.put({"action": "stop"})
+    
     def _carregar_filtros(self, event=None, force_refresh=False):
         client_id_str = self.client_id_entry.get()
         if not client_id_str.isdigit():
@@ -357,6 +287,7 @@ class App:
         self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
         self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
         self.queue_control.put({"action": "load_filters", "client_id": int(client_id_str)})
+    
     def _update_ui_state(self, is_running, loading_filters=False):
         self.is_running = is_running
         new_state = "disabled" if is_running or loading_filters else "normal"
@@ -377,6 +308,7 @@ class App:
             self.start_button.pack(side="right")
             self._validate_all_fields()
             self.start_time = None
+    
     def _update_timer(self):
         if self.is_running and self.start_time:
             elapsed_seconds = time.time() - self.start_time
@@ -385,6 +317,7 @@ class App:
             self.root.after(1000, self._update_timer)
         else:
             self.timer_label.config(text="Tempo de Execução: 00:00:00")
+    
     def update_log(self, message):
         if self.log_text.winfo_exists():
             self.log_text.config(state="normal")
@@ -392,9 +325,11 @@ class App:
             self.log_text.see(tk.END)
             self.log_text.config(state="disabled")
             self.root.update_idletasks()
+    
     def _limpar_checkboxes(self, frame, var_dict):
         for widget in frame.winfo_children(): widget.destroy()
         var_dict.clear()
+    
     def _popular_checkboxes(self, frame, var_dict, items, nome_item):
         self._limpar_checkboxes(frame, var_dict)
         if items:
@@ -408,14 +343,17 @@ class App:
         else:
             self.update_log(f"AVISO: Nenhum(a) {nome_item} encontrado(a).\n")
         self._validate_all_fields()
+    
     def _marcar_desmarcar_todos(self, var_dict, marcar: bool):
         for item in var_dict.values():
             item['var'].set(marcar)
+
     def process_gui_queue(self):
         try:
             message = self.queue_gui.get_nowait()
             if isinstance(message, dict):
                 msg_type = message.get("type")
+                
                 if msg_type == "filters_loaded":
                     self.update_log("INFO: Recebendo dados de filtros do backend...\n")
                     self._update_ui_state(False)
@@ -424,18 +362,33 @@ class App:
                     self._popular_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras, message["carriers"], "Transportadoras")
                     if not self.api_token:
                         messagebox.showerror("Erro de Autenticação", "Não foi possível obter o token. Verifique o perfil do navegador e a conexão.")
+
                 elif msg_type == "margin_info":
                     config = message.get("config", {})
                     margin_type = config.get("type")
-                    margin_value = config.get("value")
                     texto_margem = "Margem de Tolerância: "
+                    
                     if margin_type == "ABSOLUTE":
+                        margin_value = config.get("value", 0.0)
                         texto_margem += f"R$ {margin_value:.2f} (Valor Fixo)"
+                    
                     elif margin_type == "PERCENTAGE":
+                        margin_value = config.get("value", 0.0)
                         texto_margem += f"{margin_value}% (Percentual)"
+                    
+                    elif margin_type == "SYSTEM_DEFAULT":
+                        texto_margem += "Padrão do Sistema (1%)"
+
+                    elif margin_type == "DYNAMIC_CHOICE":
+                        absolute_val = config.get("absolute_value", 0.0)
+                        percentage_val = config.get("percentage_value", 0.0)
+                        texto_margem += f"Dinâmico (Maior entre R$ {absolute_val:.2f} e {percentage_val}%)"
+
                     else:
-                        texto_margem += "Não identificada"
+                        texto_margem += "Não identificada ou não configurada"
+                    
                     self.margin_label.config(text=texto_margem)
+                
                 elif msg_type == "ask_save":
                     data_to_save = message["data"]
                     if messagebox.askyesno("Salvar Relatório?", "A auditoria foi interrompida. Deseja salvar as divergências encontradas até agora?"):
@@ -443,13 +396,17 @@ class App:
                     else:
                         print("INFO: Relatório descartado pelo usuário.")
                         self.queue_control.put({"action": "finish_stop"})
+                
                 elif msg_type in ("info", "error"):
                     if msg_type == "info": messagebox.showinfo(message["title"], message["message"])
                     else: messagebox.showerror(message["title"], message["message"])
                     if message.get("done"): self._update_ui_state(False)
+            
             else:
                 self.update_log(message)
+                
         except queue.Empty:
             pass
+        
         if self.root.winfo_exists():
             self.root.after(100, self.process_gui_queue)

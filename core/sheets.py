@@ -1,8 +1,6 @@
-# core/sheets.py (Versão Final V2.1)
+# core/sheets.py
 
 import gspread
-# A biblioteca antiga 'oauth2client' não é mais necessária.
-# A nova autenticação é feita diretamente pelo gspread com a 'google-auth'.
 import os
 from datetime import datetime
 import pandas as pd
@@ -13,8 +11,6 @@ def get_sheets_client():
     Função de autenticação ATUALIZADA para usar o método moderno
     e recomendado pelo Google, evitando erros com bibliotecas descontinuadas.
     """
-    # O gspread vai encontrar automaticamente o credentials.json e usar a 
-    # biblioteca google-auth para se conectar de forma segura.
     return gspread.service_account(filename='credentials.json')
 
 def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_email: str):
@@ -31,26 +27,20 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_e
             return None
         
         try:
-            # Tenta abrir a planilha pelo nome. gspread não permite buscar em uma pasta específica
-            # então a lógica de copiar e mover ainda é a melhor.
             spreadsheet = client.open(sheet_name)
             print(f"INFO: Planilha '{sheet_name}' já existe. Atualizando dados...")
 
         except gspread.exceptions.SpreadsheetNotFound:
             print(f"INFO: Planilha '{sheet_name}' não encontrada. Criando uma nova a partir do template...")
             
-            # 1. Encontra o ID do template
             template_spreadsheet = client.open(template_name)
             
-            # 2. Copia o template. A cópia ainda é criada na "raiz" da conta de serviço.
             copied_file = client.copy(
                 template_spreadsheet.id, 
                 title=sheet_name, 
                 copy_permissions=True
             )
             
-            # 3. USA A API DO DRIVE PARA MOVER O ARQUIVO PARA A PASTA CORRETA
-            # Esta é a abordagem mais robusta para garantir que o arquivo esteja no lugar certo.
             drive_service = client.drive_service
             file_id = copied_file.id
             file = drive_service.files().get(field='parents', fileId=file_id).execute()
@@ -65,7 +55,6 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_e
             
             print(f"INFO: Planilha copiada e movida para a pasta correta no Drive.")
             
-            # Agora abre a referência da planilha copiada
             spreadsheet = client.open_by_key(copied_file.id)
 
             if recipient_email:
@@ -89,7 +78,6 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_e
                 f"R$ {div.get('valor_banco', 0):.2f}".replace('.', ','),
                 f"R$ {div.get('valor_intelipost', 0):.2f}".replace('.', ','),
                 f"R$ {div.get('diferenca_valor', 0):.2f}".replace('.', ','),
-                # V2.1 - CORREÇÃO: Trata a 'margem_aplicada' como texto, pois ela já vem formatada do comparator.py
                 div.get('margem_aplicada', 'N/A'),
                 div.get('status', '')]
             linhas_para_adicionar.append(linha)
@@ -103,7 +91,6 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, recipient_e
         return None
 
 def criar_aba_sumario(sheet_name: str, total_pedidos_auditados: int, lista_divergencias: list):
-    # Esta função não precisa de alterações
     try:
         client = get_sheets_client()
         spreadsheet = client.open(sheet_name)
@@ -112,7 +99,7 @@ def criar_aba_sumario(sheet_name: str, total_pedidos_auditados: int, lista_diver
             worksheet_to_delete = spreadsheet.worksheet("Sumário")
             spreadsheet.del_worksheet(worksheet_to_delete)
         except gspread.exceptions.WorksheetNotFound:
-            pass # A aba não existia, o que é esperado na primeira execução.
+            pass 
         
         sheet = spreadsheet.add_worksheet(title="Sumário", rows="100", cols="20")
         print("INFO: Criando/Atualizando aba de Sumário...")
