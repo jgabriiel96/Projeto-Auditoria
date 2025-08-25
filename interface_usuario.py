@@ -2,6 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+import webbrowser # Importa a biblioteca para abrir o navegador
 from datetime import datetime, timedelta
 from tkcalendar import Calendar
 import queue
@@ -435,6 +436,16 @@ class App:
                     
                     self.margin_label.config(text=texto_margem)
                 
+                elif msg_type == "ask_open_sheet":
+                    url = message.get("url")
+                    if messagebox.askyesno(message["title"], message["message"]):
+                        if url:
+                            print(f"INFO: Abrindo a planilha em {url}...")
+                            webbrowser.open_new_tab(url)
+                    
+                    if message.get("done"):
+                        self._update_ui_state(False)
+
                 elif msg_type == "ask_save":
                     data_to_save = message["data"]
                     if messagebox.askyesno("Salvar Relatório?", "A auditoria foi interrompida. Deseja salvar as divergências encontradas até agora?"):

@@ -146,9 +146,16 @@ def save_report_thread(queue_gui, data, final=True):
             formatted_duration = time.strftime("%M minutos e %S segundos", time.gmtime(duration_seconds))
             message = (f'{len(lista_divergencias)} divergências encontradas e reportadas.\n\n'
                        f'Tempo total da auditoria: {formatted_duration}\n\n'
-                       f'Acesse a planilha em:\n{url_planilha}')
+                       f'Deseja abrir a planilha no navegador?')
             title = "Processo Finalizado!" if final else "Relatório Salvo"
-            queue_gui.put({"type": "info", "title": title, "message": message, "done": True})
+            
+            queue_gui.put({
+                "type": "ask_open_sheet", 
+                "title": title, 
+                "message": message, 
+                "url": url_planilha, 
+                "done": True
+            })
         else:
             queue_gui.put({"type": "error", "title": "Erro no Relatório", "message": "Falha ao criar ou atualizar a planilha.", "done": True})
     except Exception as e:
@@ -230,6 +237,9 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         return
     finally:
         duration_seconds = time.time() - start_time
+        formatted_duration = time.strftime("%H horas, %M minutos e %S segundos", time.gmtime(duration_seconds))
+        print(f"\nINFO: Tempo total da auditoria: {formatted_duration}.")
+        
         total_pedidos_auditados = len(df_merged) if 'df_merged' in locals() else 0
         data_para_salvar = (lista_final_divergencias, client_id, total_pedidos_auditados, duration_seconds)
         
@@ -242,7 +252,26 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             if lista_final_divergencias:
                 q_control.put({"action": "save_report", "data": data_para_salvar})
             else:
-                queue_gui.put({"type": "info", "title": "Processo Finalizado!", "message": 'Nenhuma divergência encontrada.', "done": True})
+                # Se não houver divergências, também faz a pergunta para abrir a planilha (vazia)
+                message_final = "Nenhuma divergência encontrada.\n\nDeseja abrir a planilha mesmo assim?"
+                url_planilha_vazia = f"https://docs.google.com/spreadsheets/d/{os.getenv('GOOGLE_SHEET_TEMPLATE_ID', '')}" # Fallback para o template
+                # Tentativa de criar/obter a URL da planilha vazia
+                try:
+                    config = configparser.ConfigParser(); config.read('config.ini')
+                    sheet_name = f"Auditoria Frete - Cliente {client_id}"
+                    recipient_email = config['SHEETS']['email_destinatario']
+                    # A função reportar_divergencias pode retornar a URL mesmo com lista vazia
+                    url_planilha_vazia = sheets.reportar_divergencias([], sheet_name, recipient_email) or url_planilha_vazia
+                except Exception:
+                    pass
+                
+                queue_gui.put({
+                    "type": "ask_open_sheet", 
+                    "title": "Processo Finalizado!", 
+                    "message": message_final,
+                    "url": url_planilha_vazia,
+                    "done": True
+                })
         if not stop_event.is_set():
             print("\nPROCESSO DE AUDITORIA FINALIZADO.")
 

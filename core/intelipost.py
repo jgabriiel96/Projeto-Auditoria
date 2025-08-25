@@ -2,6 +2,7 @@
 
 import time
 import requests
+import math # Importa a biblioteca de matemática para o cálculo do teto (ceil)
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
@@ -131,22 +132,17 @@ def obter_pre_faturas_prontas_por_data(
     todos_os_itens = []
     pagina_atual = 1
     limite_por_pagina = 500
+    total_paginas = 0
     
     query_string = """
         query ($warehouses: [Int], $logistic_providers: [Int], $date_range: DateRangeInput, $page: Int, $limit: Int) {
             preInvoicesV2(
-                warehouses: $warehouses,
-                logistic_providers: $logistic_providers,
-                date_range: $date_range,
-                page: $page,
-                limit: $limit
+                warehouses: $warehouses, logistic_providers: $logistic_providers,
+                date_range: $date_range, page: $page, limit: $limit
             ) {
+                total
                 hasNextPage
-                items {
-                    cte { key }
-                    invoice { order_number }
-                    cte_value
-                }
+                items { cte { key }, invoice { order_number }, cte_value }
             }
         }
     """
@@ -154,20 +150,36 @@ def obter_pre_faturas_prontas_por_data(
     auth_token = api_token if api_token.lower().startswith('bearer ') else f'Bearer {api_token}'
     headers = {"Authorization": auth_token, "Content-Type": "application/json", "Origin": "https://secure.intelipost.com.br", "Referer": "https://secure.intelipost.com.br/"}
 
-    while True:
+    try:
+        print("INFO (API Paginada): Calculando total de páginas...")
+        variables = {
+            "warehouses": lista_ids_warehouses, "logistic_providers": lista_ids_transportadoras,
+            "date_range": {"start": data_inicio_str, "end": data_fim_str},
+            "page": 1, "limit": 1
+        }
+        response = requests.post("https://graphql.intelipost.com.br/", json={"query": query_string, "variables": variables}, headers=headers, timeout=180)
+        response.raise_for_status()
+        data = response.json().get("data", {}).get("preInvoicesV2", {})
+        total_itens = data.get("total", 0)
+        if total_itens > 0:
+            total_paginas = math.ceil(total_itens / limite_por_pagina)
+        print(f"INFO (API Paginada): {total_itens} itens encontrados, totalizando {total_paginas} páginas.")
+    except Exception as e:
+        print(f"ERRO (API Paginada): Não foi possível pré-calcular o total de páginas. Detalhe: {e}")
+        return []
+
+    if total_paginas == 0:
+        return []
+
+    while pagina_atual <= total_paginas:
         if stop_event.is_set():
             print("INFO (API Paginada): Solicitação de parada recebida. Interrompendo coleta.")
             break
             
         try:
-            print(f"INFO (API Paginada): Buscando página {pagina_atual} (limite de {limite_por_pagina} itens)...")
-            variables = {
-                "warehouses": lista_ids_warehouses,
-                "logistic_providers": lista_ids_transportadoras,
-                "date_range": {"start": data_inicio_str, "end": data_fim_str},
-                "page": pagina_atual,
-                "limit": limite_por_pagina
-            }
+            print(f"INFO (API Paginada): Buscando página {pagina_atual}/{total_paginas} (limite de {limite_por_pagina} itens)...")
+            variables['page'] = pagina_atual
+            variables['limit'] = limite_por_pagina
             
             response = requests.post("https://graphql.intelipost.com.br/", json={"query": query_string, "variables": variables}, headers=headers, timeout=180)
             response.raise_for_status()
