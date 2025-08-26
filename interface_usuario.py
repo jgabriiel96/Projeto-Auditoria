@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import webbrowser # Importa a biblioteca para abrir o navegador
+import webbrowser
 from datetime import datetime, timedelta
 from tkcalendar import Calendar
 import queue
@@ -18,7 +18,8 @@ class App:
         
         self.is_running = False
         self.last_searched_client_id = None
-        self.api_token = None
+        self.driver = None
+        self.captured_token = None
         self.start_time = None
         
         self.vars_transportadoras = {}
@@ -35,6 +36,7 @@ class App:
         self.root.bind("<Button-1>", self._close_calendar_if_open)
 
     def create_widgets(self):
+        # (código inalterado)
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
@@ -152,8 +154,127 @@ class App:
         self.stop_button = ttk.Button(action_btn_frame, text="Parar Auditoria", command=self.stop_audit)
         self.stop_button.pack(side="right", padx=(0, 5))
         self._update_ui_state(False)
+    
+    def start_audit(self):
+        if self.is_running: return
+        is_valid, error_message = self.run_final_validation()
+        if not is_valid:
+            messagebox.showerror("Erro de Validação", error_message)
+            return
 
+        self.progress_bar.grid()
+        self.progress_bar['value'] = 0
+        self.progress_label.config(text="0.0% | ETA: Calculando...")
+
+        client_id = int(self.client_id_entry.get())
+        start_date = self.start_date_entry.get()
+        end_date = self.end_date_entry.get()
+
+        # --- LÓGICA DE FILTRO INTELIGENTE PARA ESCALABILIDADE ---
+        # Se todos os checkboxes estiverem marcados, envia uma lista vazia (busca todos),
+        # imitando o portal e evitando que a API falhe com listas muito grandes.
+        all_warehouses_selected = all(item['var'].get() for item in self.vars_warehouses.values()) if self.vars_warehouses else False
+        selected_warehouse_ids = [] if all_warehouses_selected else [wh_id for wh_id, item in self.vars_warehouses.items() if item['var'].get()]
+
+        all_carriers_selected = all(item['var'].get() for item in self.vars_transportadoras.values()) if self.vars_transportadoras else False
+        selected_carrier_ids = [] if all_carriers_selected else [lp_id for lp_id, item in self.vars_transportadoras.items() if item['var'].get()]
+        
+        self._update_ui_state(True)
+        self.log_text.config(state="normal")
+        self.log_text.delete(1.0, tk.END)
+        self.log_text.config(state="disabled")
+        self.start_time = time.time()
+        self._update_timer()
+        self.queue_control.put({
+            "action": "start", "client_id": client_id, "start_date": start_date, "end_date": end_date,
+            "carrier_ids": selected_carrier_ids, "warehouse_ids": selected_warehouse_ids
+        })
+    
+    def process_gui_queue(self):
+        try:
+            message = self.queue_gui.get_nowait()
+            if isinstance(message, dict):
+                msg_type = message.get("type")
+                
+                if msg_type == "filters_loaded":
+                    self.update_log("INFO: Recebendo dados de filtros do backend...\n")
+                    self._update_ui_state(False)
+                    self.driver = message.get("driver") 
+                    self.captured_token = message.get("token")
+                    self._popular_checkboxes(self.scrollable_frame_wh, self.vars_warehouses, message["warehouses"], "Centros de Distribuição")
+                    self._popular_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras, message["carriers"], "Transportadoras")
+                    if not self.driver or not self.captured_token:
+                        messagebox.showerror("Erro de Autenticação", "Não foi possível obter a sessão do navegador.")
+                # ... (resto do método inalterado) ...
+                elif msg_type == "progress_update":
+                    self._update_progress(message["current"], message["total"], message.get("label", ""))
+                elif msg_type == "margin_info":
+                    config = message.get("config", {})
+                    margin_type = config.get("type")
+                    texto_margem = "Margem de Tolerância: "
+                    if margin_type == "ABSOLUTE":
+                        margin_value = config.get("value", 0.0)
+                        texto_margem += f"R$ {margin_value:.2f} (Valor Fixo)"
+                    elif margin_type == "PERCENTAGE":
+                        margin_value = config.get("value", 0.0)
+                        texto_margem += f"{margin_value}% (Percentual)"
+                    elif margin_type == "SYSTEM_DEFAULT":
+                        texto_margem += "Padrão do Sistema (1%)"
+                    elif margin_type == "DYNAMIC_CHOICE":
+                        absolute_val = config.get("absolute_value", 0.0)
+                        percentage_val = config.get("percentage_value", 0.0)
+                        texto_margem += f"Dinâmico (Maior entre R$ {absolute_val:.2f} e {percentage_val}%)"
+                    else:
+                        texto_margem += "Não identificada ou não configurada"
+                    self.margin_label.config(text=texto_margem)
+                elif msg_type == "ask_open_sheet":
+                    url = message.get("url")
+                    if messagebox.askyesno(message["title"], message["message"]):
+                        if url:
+                            print(f"INFO: Abrindo a planilha em {url}...")
+                            webbrowser.open_new_tab(url)
+                    if message.get("done"):
+                        self._update_ui_state(False)
+                elif msg_type == "ask_save":
+                    data_to_save = message["data"]
+                    if messagebox.askyesno("Salvar Relatório?", "A auditoria foi interrompida. Deseja salvar as divergências encontradas até agora?"):
+                        self.queue_control.put({"action": "save_report", "data": data_to_save})
+                    else:
+                        print("INFO: Relatório descartado pelo usuário.")
+                        self.queue_control.put({"action": "finish_stop"})
+                elif msg_type in ("info", "error"):
+                    if msg_type == "info": messagebox.showinfo(message["title"], message["message"])
+                    else: messagebox.showerror(message["title"], message["message"])
+                    if message.get("done"):
+                        self._update_ui_state(False)
+            else:
+                self.update_log(message)
+        except queue.Empty:
+            pass
+        if self.root.winfo_exists():
+            self.root.after(100, self.process_gui_queue)
+
+    def _validate_all_fields(self, *args):
+        # ... (código inalterado, mas agora verifica self.driver e self.captured_token)
+        client_id_ok = self.client_id_entry.get().isdigit()
+        dates_ok = False
+        try:
+            start_date_obj = datetime.strptime(self.start_date_entry.get(), '%Y-%m-%d').date()
+            end_date_obj = datetime.strptime(self.end_date_entry.get(), '%Y-%m-%d').date()
+            if end_date_obj >= start_date_obj:
+                dates_ok = True
+        except (ValueError, TypeError):
+            dates_ok = False
+        carrier_ok = any(item['var'].get() for item in self.vars_transportadoras.values())
+        warehouse_ok = any(item['var'].get() for item in self.vars_warehouses.values())
+        if client_id_ok and dates_ok and carrier_ok and warehouse_ok and self.driver and self.captured_token:
+            self.start_button.config(state="normal")
+        else:
+            self.start_button.config(state="disabled")
+
+# ... (restante da classe inalterado)
     def _open_calendar(self, entry_widget):
+        # (código inalterado)
         self._close_calendar_if_open() 
         x = entry_widget.winfo_rootx()
         y = entry_widget.winfo_rooty() + entry_widget.winfo_height()
@@ -173,6 +294,7 @@ class App:
         self.calendar_window.bind("<Button-1>", lambda event: "break")
     
     def _on_date_selected(self, event, entry_widget):
+        # (código inalterado)
         widget = event.widget
         selected_date = widget.get_date()
         entry_widget.delete(0, tk.END)
@@ -181,11 +303,13 @@ class App:
         self._validate_all_fields()
     
     def _close_calendar_if_open(self, event=None):
+        # (código inalterado)
         if self.calendar_window:
             self.calendar_window.destroy()
             self.calendar_window = None
     
     def _on_date_change(self, event):
+        # (código inalterado)
         widget = event.widget
         if event.keysym in ('BackSpace', 'Delete'):
             self._validate_all_fields()
@@ -205,37 +329,8 @@ class App:
             widget.icursor(tk.END)
         self._validate_all_fields()
     
-    def _validate_all_fields(self, *args):
-        self.start_date_entry.config(style='TEntry')
-        self.end_date_entry.config(style='TEntry')
-        client_id_ok = self.client_id_entry.get().isdigit()
-        start_date_obj, end_date_obj = None, None
-        dates_ok = False
-        try:
-            start_date_obj = datetime.strptime(self.start_date_entry.get(), '%Y-%m-%d').date()
-        except (ValueError, TypeError):
-            if self.start_date_entry.get() != "":
-                self.start_date_entry.config(style='Invalid.TEntry')
-        try:
-            end_date_obj = datetime.strptime(self.end_date_entry.get(), '%Y-%m-%d').date()
-        except (ValueError, TypeError):
-            if self.end_date_entry.get() != "":
-                self.end_date_entry.config(style='Invalid.TEntry')
-        if start_date_obj and end_date_obj:
-            if end_date_obj < start_date_obj:
-                self.end_date_entry.config(style='Invalid.TEntry')
-            elif start_date_obj < (datetime.now() - timedelta(days=90)).date():
-                self.start_date_entry.config(style='Invalid.TEntry')
-            else:
-                dates_ok = True
-        carrier_ok = any(item['var'].get() for item in self.vars_transportadoras.values())
-        warehouse_ok = any(item['var'].get() for item in self.vars_warehouses.values())
-        if client_id_ok and dates_ok and carrier_ok and warehouse_ok and self.api_token:
-            self.start_button.config(state="normal")
-        else:
-            self.start_button.config(state="disabled")
-
     def run_final_validation(self):
+        # (código inalterado)
         try:
             start_date = datetime.strptime(self.start_date_entry.get(), '%Y-%m-%d').date()
             end_date = datetime.strptime(self.end_date_entry.get(), '%Y-%m-%d').date()
@@ -245,7 +340,7 @@ class App:
             if start_date < earliest_date:
                 return False, f"O período de auditoria não pode começar antes de {earliest_date.strftime('%d/%m/%Y')} (limite de 90 dias)."
         except (ValueError, TypeError):
-                 return False, "O formato de uma das datas é inválido. Use YYYY-MM-DD."
+              return False, "O formato de uma das datas é inválido. Use YYYY-MM-DD."
         if not self.client_id_entry.get().isdigit():
             return False, "O ID do Cliente é inválido."
         if not any(item['var'].get() for item in self.vars_warehouses.values()):
@@ -256,40 +351,15 @@ class App:
 
     def validate_number(self, P):
         return P.isdigit() or P == ""
-    
-    def start_audit(self):
-        if self.is_running: return
-        is_valid, error_message = self.run_final_validation()
-        if not is_valid:
-            messagebox.showerror("Erro de Validação", error_message)
-            return
-
-        self.progress_bar.grid()
-        self.progress_bar['value'] = 0
-        self.progress_label.config(text="0.0% | ETA: Calculando...")
-
-        client_id = int(self.client_id_entry.get())
-        start_date = self.start_date_entry.get()
-        end_date = self.end_date_entry.get()
-        selected_warehouse_ids = [wh_id for wh_id, item in self.vars_warehouses.items() if item['var'].get()]
-        selected_carrier_ids = [lp_id for lp_id, item in self.vars_transportadoras.items() if item['var'].get()]
-        self._update_ui_state(True)
-        self.log_text.config(state="normal")
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state="disabled")
-        self.start_time = time.time()
-        self._update_timer()
-        self.queue_control.put({
-            "action": "start", "client_id": client_id, "start_date": start_date, "end_date": end_date,
-            "carrier_ids": selected_carrier_ids, "warehouse_ids": selected_warehouse_ids, "api_token": self.api_token
-        })
 
     def stop_audit(self):
+        # (código inalterado)
         print("\nAVISO: Solicitação de parada enviada. Finalizando o pedido atual...")
         self.stop_button.config(text="Parando...", state="disabled")
         self.queue_control.put({"action": "stop"})
     
     def _carregar_filtros(self, event=None, force_refresh=False):
+        # (código inalterado)
         client_id_str = self.client_id_entry.get()
         if not client_id_str.isdigit():
             self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
@@ -300,7 +370,8 @@ class App:
         if not force_refresh and client_id_str == self.last_searched_client_id:
             return
         self.last_searched_client_id = client_id_str
-        self.api_token = None
+        self.driver = None 
+        self.captured_token = None
         self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
         self.update_log("INFO: Autenticando e buscando filtros para o cliente...\n")
         self._update_ui_state(False, loading_filters=True)
@@ -309,6 +380,7 @@ class App:
         self.queue_control.put({"action": "load_filters", "client_id": int(client_id_str)})
     
     def _update_ui_state(self, is_running, loading_filters=False):
+        # (código inalterado)
         self.is_running = is_running
         new_state = "disabled" if is_running or loading_filters else "normal"
         self.client_id_entry.config(state=new_state)
@@ -335,6 +407,7 @@ class App:
             self.start_time = None
     
     def _update_timer(self):
+        # (código inalterado)
         if self.is_running and self.start_time:
             elapsed_seconds = time.time() - self.start_time
             formatted_time = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
@@ -344,6 +417,7 @@ class App:
             self.timer_label.config(text="Tempo de Execução: 00:00:00")
     
     def update_log(self, message):
+        # (código inalterado)
         if self.log_text.winfo_exists():
             self.log_text.config(state="normal")
             self.log_text.insert(tk.END, message)
@@ -352,10 +426,12 @@ class App:
             self.root.update_idletasks()
     
     def _limpar_checkboxes(self, frame, var_dict):
+        # (código inalterado)
         for widget in frame.winfo_children(): widget.destroy()
         var_dict.clear()
     
     def _popular_checkboxes(self, frame, var_dict, items, nome_item):
+        # (código inalterado)
         self._limpar_checkboxes(frame, var_dict)
         if items:
             for item_id, item_name in items:
@@ -370,101 +446,27 @@ class App:
         self._validate_all_fields()
     
     def _marcar_desmarcar_todos(self, var_dict, marcar: bool):
+        # (código inalterado)
         for item in var_dict.values():
             item['var'].set(marcar)
 
-    def _update_progress(self, current: int, total: int):
+    def _update_progress(self, current: int, total: int, label: str = ""):
+        # (código inalterado)
         if total > 0:
             percent = (current / total) * 100
             self.progress_bar['value'] = percent
-            
             eta_str = "--:--"
-            if current > 0 and self.start_time:
-                elapsed_time = time.time() - self.start_time
-                time_per_item = elapsed_time / current
-                remaining_items = total - current
-                eta_seconds = time_per_item * remaining_items
-                
-                if eta_seconds > 3600:
-                    eta_str = time.strftime("%H:%M:%S", time.gmtime(eta_seconds))
-                else:
-                    eta_str = time.strftime("%M:%S", time.gmtime(eta_seconds))
-
-            self.progress_label.config(text=f"{percent:.1f}% ({current}/{total}) | ETA: {eta_str}")
-
-    def process_gui_queue(self):
-        try:
-            message = self.queue_gui.get_nowait()
-            if isinstance(message, dict):
-                msg_type = message.get("type")
-                
-                if msg_type == "progress_update":
-                    self._update_progress(message["current"], message["total"])
-
-                elif msg_type == "filters_loaded":
-                    self.update_log("INFO: Recebendo dados de filtros do backend...\n")
-                    self._update_ui_state(False)
-                    self.api_token = message["token"]
-                    self._popular_checkboxes(self.scrollable_frame_wh, self.vars_warehouses, message["warehouses"], "Centros de Distribuição")
-                    self._popular_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras, message["carriers"], "Transportadoras")
-                    if not self.api_token:
-                        messagebox.showerror("Erro de Autenticação", "Não foi possível obter o token. Verifique o perfil do navegador e a conexão.")
-
-                elif msg_type == "margin_info":
-                    config = message.get("config", {})
-                    margin_type = config.get("type")
-                    texto_margem = "Margem de Tolerância: "
-                    
-                    if margin_type == "ABSOLUTE":
-                        margin_value = config.get("value", 0.0)
-                        texto_margem += f"R$ {margin_value:.2f} (Valor Fixo)"
-                    
-                    elif margin_type == "PERCENTAGE":
-                        margin_value = config.get("value", 0.0)
-                        texto_margem += f"{margin_value}% (Percentual)"
-                    
-                    elif margin_type == "SYSTEM_DEFAULT":
-                        texto_margem += "Padrão do Sistema (1%)"
-
-                    elif margin_type == "DYNAMIC_CHOICE":
-                        absolute_val = config.get("absolute_value", 0.0)
-                        percentage_val = config.get("percentage_value", 0.0)
-                        texto_margem += f"Dinâmico (Maior entre R$ {absolute_val:.2f} e {percentage_val}%)"
-
+            if current > 10:
+                if self.start_time:
+                    elapsed_time = time.time() - self.start_time
+                    time_per_item = elapsed_time / current
+                    remaining_items = total - current
+                    eta_seconds = time_per_item * remaining_items
+                    if eta_seconds > 3600:
+                        eta_str = time.strftime("%H:%M:%S", time.gmtime(eta_seconds))
                     else:
-                        texto_margem += "Não identificada ou não configurada"
-                    
-                    self.margin_label.config(text=texto_margem)
-                
-                elif msg_type == "ask_open_sheet":
-                    url = message.get("url")
-                    if messagebox.askyesno(message["title"], message["message"]):
-                        if url:
-                            print(f"INFO: Abrindo a planilha em {url}...")
-                            webbrowser.open_new_tab(url)
-                    
-                    if message.get("done"):
-                        self._update_ui_state(False)
-
-                elif msg_type == "ask_save":
-                    data_to_save = message["data"]
-                    if messagebox.askyesno("Salvar Relatório?", "A auditoria foi interrompida. Deseja salvar as divergências encontradas até agora?"):
-                        self.queue_control.put({"action": "save_report", "data": data_to_save})
-                    else:
-                        print("INFO: Relatório descartado pelo usuário.")
-                        self.queue_control.put({"action": "finish_stop"})
-                
-                elif msg_type in ("info", "error"):
-                    if msg_type == "info": messagebox.showinfo(message["title"], message["message"])
-                    else: messagebox.showerror(message["title"], message["message"])
-                    if message.get("done"):
-                        self._update_ui_state(False)
-            
-            else:
-                self.update_log(message)
-                
-        except queue.Empty:
-            pass
-        
-        if self.root.winfo_exists():
-            self.root.after(100, self.process_gui_queue)
+                        eta_str = time.strftime("%M:%S", time.gmtime(eta_seconds))
+            progress_text = f"{percent:.1f}% ({current}/{total})"
+            if label:
+                progress_text = f"{label}: {progress_text}"
+            self.progress_label.config(text=f"{progress_text} | ETA: {eta_str}")
