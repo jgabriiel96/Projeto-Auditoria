@@ -36,14 +36,9 @@ class App:
         self.root.bind("<Button-1>", self._close_calendar_if_open)
 
     def _carregar_filtros(self, event=None, force_refresh=False):
-        """
-        Inicia o processo de carregamento de filtros para um novo cliente.
-        A lógica de reset do navegador agora é 100% gerenciada pelo backend.
-        """
         client_id_str = self.client_id_entry.get()
 
         if not client_id_str.isdigit():
-            # Limpa a UI se o ID for inválido
             self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
             self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
             self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
@@ -52,7 +47,6 @@ class App:
         if not force_refresh and client_id_str == self.last_searched_client_id:
             return
         
-        # Limpa o estado visual da UI imediatamente
         self.last_searched_client_id = client_id_str
         self.driver = None
         self.captured_token = None
@@ -61,10 +55,9 @@ class App:
         self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
         self._validate_all_fields()
         
-        self.update_log("INFO: Solicitando nova sessão para o cliente...\n")
+        self.update_log(f"INFO: Solicitando nova sessão para o cliente {client_id_str}...\n")
         self._update_ui_state(False, loading_filters=True)
         
-        # Envia a solicitação para o backend. O backend cuidará da limpeza da sessão.
         self.queue_control.put({"action": "load_filters", "client_id": int(client_id_str)})
 
     def create_widgets(self):

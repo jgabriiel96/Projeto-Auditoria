@@ -34,6 +34,17 @@ class Logger:
     def flush(self):
         self.terminal.flush()
 
+class PerformanceMonitor:
+    def __init__(self):
+        self.api_call_count = 0
+        self.lock = threading.Lock()
+    def increment_api_call(self):
+        with self.lock:
+            self.api_call_count += 1
+    def get_count(self):
+        with self.lock:
+            return self.api_call_count
+
 def _get_browser_paths():
     paths = {'chrome_exec': '', 'chrome_user_data': '', 'brave_exec': '', 'brave_user_data': ''}
     if sys.platform == 'win32':
@@ -69,6 +80,7 @@ def kill_browser_processes(exec_name: str):
 
 def carregar_filtros_thread(queue_gui, client_id):
     driver = None
+    monitor = PerformanceMonitor()
     try:
         config = configparser.ConfigParser()
         config.read('config.ini')
@@ -104,48 +116,16 @@ def carregar_filtros_thread(queue_gui, client_id):
         servico = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=servico, options=options)
         print("SUCESSO: Robô conectado com sucesso ao navegador!")
-
-        print("INFO: Limpando sessão anterior para garantir um início limpo...")
-        try:
-            if not driver.current_url or "about:blank" in driver.current_url:
-                 if driver.window_handles:
-                    driver.switch_to.window(driver.window_handles[0])
-            driver.execute_script("window.localStorage.clear();")
-            driver.execute_script("window.sessionStorage.clear();")
-            driver.delete_all_cookies()
-            print("SUCESSO: Sessão do navegador anterior foi limpa.")
-            time.sleep(1)
-        except Exception as e:
-            print(f"AVISO: Não foi possível limpar a sessão anterior. Prosseguindo. Erro: {e}")
         
-        driver.set_script_timeout(120)
-        wait = WebDriverWait(driver, 60)
-        sysnode_tab = driver.current_window_handle
-        intelipost.preparar_pagina_e_capturar_token(driver, str(client_id))
+        token_data_json, captured_token = intelipost.preparar_pagina_e_capturar_token(driver, str(client_id))
         
-        print("INFO: Aguardando a nova aba da Intelipost ser aberta...")
-        wait.until(EC.number_of_windows_to_be(2), "A aba de login da Intelipost não abriu.")
-        intelipost_tab = [handle for handle in driver.window_handles if handle != sysnode_tab][0]
-        driver.switch_to.window(intelipost_tab)
+        warehouses = intelipost.obter_centros_de_distribuicao_api(driver, captured_token, monitor=monitor)
+        carriers = intelipost.obter_transportadoras_api(driver, captured_token, monitor=monitor)
+        margin_config = intelipost.obter_configuracao_margem_api(driver, captured_token, monitor=monitor)
         
-        print("INFO: Foco alterado para a aba da Intelipost.")
-        print("INFO: Aguardando a aplicação web finalizar a autenticação e salvar o token...")
-        token_data_json = wait.until(lambda d: d.execute_script("return window.localStorage.getItem('ls.user');"), "Tempo limite atingido esperando pelo token no localStorage.")
-        print("SUCESSO: Token de autenticação detectado no localStorage.")
-        
-        driver.switch_to.window(sysnode_tab)
-        driver.close()
-        driver.switch_to.window(intelipost_tab)
-        print("SUCESSO: Sessão no contexto do cliente estabelecida com sucesso.")
-        
-        token_data = json.loads(token_data_json)
-        captured_token = token_data.get("access_token")
-        if not captured_token:
-            raise ValueError("access_token não foi encontrado dentro do objeto 'ls.user'.")
-
-        warehouses = intelipost.obter_centros_de_distribuicao_api(driver, captured_token)
-        carriers = intelipost.obter_transportadoras_api(driver, captured_token)
-        margin_config = intelipost.obter_configuracao_margem_api(driver, captured_token)
+        print(f"\n--- LOG DE PERFORMANCE (FILTROS) ---")
+        print(f"Total de requisições GraphQL nesta etapa: {monitor.get_count()}")
+        print(f"-------------------------------------\n")
         
         queue_gui.put({
             "type": "filters_loaded", "driver": driver, "token": captured_token,
@@ -192,13 +172,14 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
     start_time = time.time()
     lista_final_divergencias = []
     df_aggregated = pd.DataFrame()
+    monitor = PerformanceMonitor()
     try:
-        config_margem = intelipost.obter_configuracao_margem_api(driver, token)
+        config_margem = intelipost.obter_configuracao_margem_api(driver, token, monitor=monitor)
         if not config_margem:
             raise ValueError("Não foi possível obter a configuração da margem.")
         
         print("\nINFO: Etapa 1/3 - Buscando lista de pré-faturas na API...")
-        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(driver, token, data_inicio, data_fim, lista_ids_warehouses, lista_ids_transportadoras, stop_event)
+        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(driver, token, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, stop_event, monitor=monitor)
 
         if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
         if not pre_faturas_api:
@@ -206,27 +187,32 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             return
 
         print(f"INFO: {len(pre_faturas_api)} pré-faturas encontradas. Etapa 2/3 - Enriqueçendo dados com detalhes...")
-        ids_para_buscar = [item.get("id") for item in pre_faturas_api]
-        chunk_size = 100
+        ids_para_buscar = [item.get("id") for item in pre_faturas_api if item]
+        
+        chunk_size = 25
+        
         lotes_de_ids = [ids_para_buscar[i:i + chunk_size] for i in range(0, len(ids_para_buscar), chunk_size)]
         detalhes_completos = {}
         total_lotes = len(lotes_de_ids)
 
-        # --- RESTAURADO O LOOP COM ATUALIZAÇÃO DE PROGRESSO ---
         for i, lote in enumerate(lotes_de_ids):
             if stop_event.is_set(): break
             
             progress_label = f"Enriquecendo dados: Lote {i+1}/{total_lotes}"
             queue_gui.put({"type": "progress_update", "current": i, "total": total_lotes, "label": progress_label})
             
-            resultado_lote = intelipost.obter_detalhes_em_lote(driver, token, lote)
+            resultado_lote = intelipost.obter_detalhes_em_lote(driver, token, lote, monitor=monitor)
             if resultado_lote:
                 detalhes_completos.update(resultado_lote)
+            else:
+                print(f"AVISO: Lote {i+1}/{total_lotes} não retornou dados. Pode haver falha parcial na API.")
+            time.sleep(0.2)
 
         queue_gui.put({"type": "progress_update", "current": total_lotes, "total": total_lotes, "label": "Dados enriquecidos."})
-
+        
         dados_api_list = []
         for item in pre_faturas_api:
+            if not item: continue
             detalhes = detalhes_completos.get(item.get("id"))
             if item.get("invoice") and len(item["invoice"]) > 0 and detalhes:
                 order_number = item["invoice"][0].get("order_number")
@@ -258,7 +244,8 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         df_api['so_order_number'] = df_api['so_order_number'].astype(str)
         df_merged = pd.merge(df_pedidos_db, df_api, on="so_order_number", how="inner")
         
-        df_merged['so_provider_shipping_costs'].fillna(df_merged['tms_value'], inplace=True)
+        # Correção para o FutureWarning do Pandas
+        df_merged['so_provider_shipping_costs'] = df_merged['so_provider_shipping_costs'].fillna(df_merged['tms_value'])
         if df_merged.empty:
             raise ValueError("Falha ao unir os dados da API e do banco de dados.")
 
@@ -304,6 +291,11 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
     finally:
         if driver:
             pass
+        
+        print(f"\n--- LOG DE PERFORMANCE (AUDITORIA) ---")
+        print(f"Total de requisições GraphQL na auditoria: {monitor.get_count()}")
+        print(f"----------------------------------------\n")
+        
         duration_seconds = time.time() - start_time
         total_pedidos_auditados = len(df_aggregated) if not df_aggregated.empty else 0
         data_para_salvar = (lista_final_divergencias, client_id, data_inicio, data_fim, total_pedidos_auditados, duration_seconds)
