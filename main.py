@@ -212,7 +212,7 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         detalhes_completos = {}
         total_lotes = len(lotes_de_ids)
 
-        # --- CORREÇÃO: RESTAURADO O LOOP COM ATUALIZAÇÃO DE PROGRESSO ---
+        # --- RESTAURADO O LOOP COM ATUALIZAÇÃO DE PROGRESSO ---
         for i, lote in enumerate(lotes_de_ids):
             if stop_event.is_set(): break
             

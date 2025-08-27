@@ -67,9 +67,6 @@ class App:
         # Envia a solicitação para o backend. O backend cuidará da limpeza da sessão.
         self.queue_control.put({"action": "load_filters", "client_id": int(client_id_str)})
 
-    # O restante do arquivo pode ser colado da sua versão original/última versão.
-    # Nenhuma outra função precisa de alteração.
-
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky="nsew")

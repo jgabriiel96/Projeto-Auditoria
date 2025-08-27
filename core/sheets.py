@@ -141,7 +141,7 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
                 group_end_index = start_row_api + i
                 if group_end_index > current_group_start:
                     bg_color = COLORS['light_gray_background'] if use_light_gray_background else COLORS['white']
-                    # --- AJUSTE AQUI: Adiciona o alinhamento horizontal central ---
+                    # --- Adiciona o alinhamento horizontal central ---
                     requests.append({
                         'repeatCell': {
                             'cell': {
@@ -170,7 +170,7 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
         last_group_end_index = len(df) + start_row_api
         if last_group_end_index > current_group_start:
             bg_color = COLORS['light_gray_background'] if use_light_gray_background else COLORS['white']
-            # --- AJUSTE AQUI: Adiciona o alinhamento horizontal central para o último grupo ---
+            # --- Adiciona o alinhamento horizontal central para o último grupo ---
             requests.append({
                 'repeatCell': {
                     'cell': {
@@ -219,7 +219,6 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
         return None
 
 def criar_aba_sumario(spreadsheet, df_divergencias, total_pedidos_auditados):
-    # (Código inalterado)
     try:
         if df_divergencias.empty:
             return

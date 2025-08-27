@@ -75,7 +75,7 @@ def encontrar_divergencias(row: pd.Series) -> list | None:
     except (ValueError, TypeError, KeyError):
         pass
 
-    # --- 2. NOVA AUDITORIA DE PESO TOTAL (Sem margem) ---
+    # --- 2. AUDITORIA DE PESO TOTAL (Sem margem) ---
     try:
         soma_peso_declarado = float(row.get('soma_peso_declarado'))
         api_peso_cubado = float(row.get('api_peso_cubado'))
@@ -84,7 +84,7 @@ def encontrar_divergencias(row: pd.Series) -> list | None:
         # REGRA: O peso a ser considerado é o MAIOR entre a soma dos declarados e o cubado.
         peso_considerado = max(soma_peso_declarado, api_peso_cubado)
         
-        # Comparação direta, sem margem, arredondando para evitar erros de float.
+        # Comparação direta, sem margem
         if round(peso_considerado, 3) != round(api_peso_cobrado, 3):
             diferenca_peso = round(peso_considerado - api_peso_cobrado, 3)
             status_peso = f"Peso divergente. Considerado ({peso_considerado:.3f} kg) vs Cobrado ({api_peso_cobrado:.3f} kg)"
