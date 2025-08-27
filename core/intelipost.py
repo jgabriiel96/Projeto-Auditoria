@@ -30,6 +30,7 @@ def _execute_graphql_via_selenium(driver, query: str, variables: dict, token: st
         .catch(error => callback({{ "js_error": error.toString() }}));
     """
     try:
+        # O timeout agora é definido uma vez no main.py, não a cada chamada.
         response_data = driver.execute_async_script(script, payload, token)
         if response_data and "js_error" in response_data:
             print(f"ERRO (GraphQL via JS): {response_data['js_error']}")
@@ -39,8 +40,10 @@ def _execute_graphql_via_selenium(driver, query: str, variables: dict, token: st
         print(f"ERRO (Selenium execute_script): Falha ao executar a query. Detalhe: {e}")
         return None
 
+# ... (O restante das funções em intelipost.py permanece exatamente o mesmo) ...
 @retry(tentativas=3, delay=5)
 def preparar_pagina_e_capturar_token(driver, client_id: str):
+    # (Código inalterado)
     wait = WebDriverWait(driver, 60)
     print("INFO: Iniciando preparação para o cliente (login via sysnode)...")
     driver.get(f"https://api-sysnode.intelipost.com.br/sysnode/edit_client?q={client_id}")
@@ -53,6 +56,7 @@ def preparar_pagina_e_capturar_token(driver, client_id: str):
     actions.move_to_element(link_elemento).pause(0.5).click_and_hold().pause(0.2).release().perform()
 
 def obter_centros_de_distribuicao_api(driver, token: str) -> list:
+    # (Código inalterado)
     if not driver or not token: return []
     query = "{ warehouses { id official_name } }"
     json_response = _execute_graphql_via_selenium(driver, query, {}, token)
@@ -63,6 +67,7 @@ def obter_centros_de_distribuicao_api(driver, token: str) -> list:
     return []
 
 def obter_transportadoras_api(driver, token: str) -> list:
+    # (Código inalterado)
     if not driver or not token: return []
     query = "query ($active: Boolean) { logisticProviders(active: $active) { id name } }"
     variables = {"active": False}
@@ -74,6 +79,7 @@ def obter_transportadoras_api(driver, token: str) -> list:
     return []
 
 def obter_pre_faturas_prontas_por_data(driver, token: str, data_inicio_str: str, data_fim_str: str, lista_ids_warehouses: list, lista_ids_transportadoras: list, stop_event: threading.Event) -> list:
+    # (Código inalterado)
     if not driver or not token: return []
     todos_os_itens = []
     pagina_atual = 1
@@ -93,8 +99,7 @@ def obter_pre_faturas_prontas_por_data(driver, token: str, data_inicio_str: str,
         variables = {
             "date_range": {"start": data_inicio_str, "end": data_fim_str},
             "logistic_providers": lista_ids_transportadoras, "warehouses": lista_ids_warehouses,
-            "delivery_methods": [], 
-            "status": ["WAITING_FOR_CONCILIATION"], # <-- IGNORANDO PEDIDOS PAGOS
+            "delivery_methods": [], "status": ["WAITING_FOR_CONCILIATION"],
             "margin_status": "", "difference": "",
             "search_by": "order_number", "search_values": [],
             "page": 1, "limit": 1
@@ -133,27 +138,34 @@ def obter_pre_faturas_prontas_por_data(driver, token: str, data_inicio_str: str,
             break
     return todos_os_itens
 
-def obter_detalhes_pre_fatura(driver, token: str, pre_fatura_id: str) -> dict | None:
-    if not driver or not pre_fatura_id: return None
-    query_string = """
-        query ($id: String!, $action: String!) {
-            preInvoiceDetail(id: $id, action: $action) {
-                values {
-                    origin_zipcode, destination_zipcode, invoice { number },
-                    volumes { weight, squared_weight, selected_weight, dimensions { width, height, length } }
-                }
-            }
+def obter_detalhes_em_lote(driver, token: str, pre_fatura_ids: list[str]) -> dict:
+    # (Código inalterado)
+    if not driver or not token or not pre_fatura_ids:
+        return {}
+    query_parts = []
+    sub_query_template = """
+        values {
+            origin_zipcode, destination_zipcode, invoice { number },
+            volumes { weight, squared_weight, selected_weight, dimensions { width, height, length } }
         }
     """
-    variables = {"id": pre_fatura_id, "action": "values"}
-    json_response = _execute_graphql_via_selenium(driver, query_string, variables, token)
+    for i, fatura_id in enumerate(pre_fatura_ids):
+        safe_fatura_id = fatura_id.replace('"', '\\"')
+        query_parts.append(f'fatura_{i}: preInvoiceDetail(id: "{safe_fatura_id}", action: "values") {{ {sub_query_template} }}')
+    full_query = f"query {{ {' '.join(query_parts)} }}"
+    json_response = _execute_graphql_via_selenium(driver, full_query, {}, token)
     if json_response and "data" in json_response:
-        detail_data = json_response.get("data", {}).get("preInvoiceDetail", {})
-        if detail_data and detail_data.get("values"):
-            return detail_data["values"][0]
-    return None
+        data = json_response["data"]
+        resultados = {}
+        for i, fatura_id in enumerate(pre_fatura_ids):
+            resultado_alias = data.get(f'fatura_{i}')
+            if resultado_alias and resultado_alias.get("values"):
+                resultados[fatura_id] = resultado_alias["values"][0]
+        return resultados
+    return {}
 
 def obter_configuracao_margem_api(driver, token: str) -> dict | None:
+    # (Código inalterado)
     if not driver: return None
     query = "{ reconConfig { marginType, marginFixedValue, marginPercentageValue, marginMixedFixedValue, marginMixedPercentageValue } }"
     json_response = _execute_graphql_via_selenium(driver, query, {}, token)

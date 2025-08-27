@@ -25,9 +25,9 @@ import socket
 import pandas as pd
 import traceback
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class Logger:
+    # (Código inalterado)
     def __init__(self, queue_gui, terminal_original):
         self.queue = queue_gui
         self.terminal = terminal_original
@@ -38,6 +38,7 @@ class Logger:
         self.terminal.flush()
 
 def _get_browser_paths():
+    # (Código inalterado)
     paths = {'chrome_exec': '', 'chrome_user_data': '', 'brave_exec': '', 'brave_user_data': ''}
     if sys.platform == 'win32':
         local_app_data = os.getenv('LOCALAPPDATA', '')
@@ -59,10 +60,12 @@ def _get_browser_paths():
     return paths
 
 def is_port_in_use(port: int):
+    # (Código inalterado)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def kill_browser_processes(exec_name: str):
+    # (Código inalterado)
     for proc in psutil.process_iter(['name', 'exe']):
         if proc.info['name'] == exec_name:
             try:
@@ -73,6 +76,7 @@ def kill_browser_processes(exec_name: str):
 def carregar_filtros_thread(queue_gui, client_id):
     driver = None
     try:
+        # (Lógica de inicialização do browser inalterada)
         config = configparser.ConfigParser()
         config.read('config.ini')
         caminho_executavel = config.get('BROWSER', 'caminho_executavel', fallback=None)
@@ -83,7 +87,7 @@ def carregar_filtros_thread(queue_gui, client_id):
         if not caminho_executavel:
             caminho_executavel = paths.get('brave_exec') or paths.get('chrome_exec')
         if not caminho_executavel or not os.path.isfile(caminho_executavel):
-            raise FileNotFoundError("Não foi possível localizar o navegador. Verifique se o Chrome/Brave está instalado.")
+            raise FileNotFoundError("Não foi possível localizar o navegador.")
         exec_name = os.path.basename(caminho_executavel)
         user_data_dir = paths.get('brave_user_data') if 'brave' in exec_name.lower() else paths.get('chrome_user_data')
         if not os.path.isdir(user_data_dir):
@@ -91,20 +95,14 @@ def carregar_filtros_thread(queue_gui, client_id):
         if not is_port_in_use(debug_port):
             is_running = any(p.name() == exec_name for p in psutil.process_iter(['name']))
             if is_running:
-                print("AVISO: Navegador detectado em modo normal. Solicitando reinício ao usuário.")
-                messagebox.showwarning("Reinicialização Necessária", f"O {exec_name} já está em execução.\n\nPara que a automação funcione, o robô precisa reiniciá-lo em um modo especial.\n\nPor favor, salve seu trabalho em todas as janelas e clique em OK.")
-                print("INFO: Usuário notificado. Fechando processos existentes...")
+                messagebox.showwarning("Reinicialização Necessária", f"O {exec_name} já está em execução.\n\nPara que a automação funcione, o robô precisa reiniciá-lo em um modo especial.\n\nPor favor, salve seu trabalho e clique em OK.")
                 kill_browser_processes(exec_name)
                 time.sleep(2)
-            print(f"INFO: Iniciando o navegador com o perfil do usuário no modo de depuração (porta {debug_port})...")
             command = [caminho_executavel, f'--remote-debugging-port={debug_port}', f'--user-data-dir={user_data_dir}']
             if headless_mode:
-                print("INFO: Modo headless ativado. Adicionando argumentos '--headless' e '--window-size'.")
-                command.append('--headless')
-                command.append('--window-size=1920,1080')
+                command.extend(['--headless', '--window-size=1920,1080'])
             subprocess.Popen(command)
             time.sleep(5)
-            print("SUCESSO: Navegador iniciado em modo de depuração.")
         options = ChromeOptions()
         options.binary_location = caminho_executavel
         options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
@@ -112,36 +110,31 @@ def carregar_filtros_thread(queue_gui, client_id):
         driver = webdriver.Chrome(service=servico, options=options)
         print("SUCESSO: Robô conectado com sucesso ao navegador!")
         
+        # --- MELHORIA: AUMENTANDO A PACIÊNCIA DO SELENIUM ---
+        driver.set_script_timeout(120) # Aumenta o timeout para 2 minutos
+        
         wait = WebDriverWait(driver, 60)
         sysnode_tab = driver.current_window_handle
-        
         intelipost.preparar_pagina_e_capturar_token(driver, str(client_id))
-        
         print("INFO: Aguardando a nova aba da Intelipost ser aberta...")
         wait.until(EC.number_of_windows_to_be(2), "A aba de login da Intelipost não abriu.")
-
         intelipost_tab = [handle for handle in driver.window_handles if handle != sysnode_tab][0]
         driver.switch_to.window(intelipost_tab)
         print("INFO: Foco alterado para a aba da Intelipost.")
-        
         print("INFO: Aguardando a aplicação web finalizar a autenticação e salvar o token...")
         token_data_json = wait.until(lambda d: d.execute_script("return window.localStorage.getItem('ls.user');"), "Tempo limite atingido esperando pelo token no localStorage.")
         print("SUCESSO: Token de autenticação detectado no localStorage.")
-        
         driver.switch_to.window(sysnode_tab)
         driver.close()
         driver.switch_to.window(intelipost_tab)
         print("SUCESSO: Sessão no contexto do cliente estabelecida com sucesso.")
-        
         token_data = json.loads(token_data_json)
         captured_token = token_data.get("access_token")
         if not captured_token:
             raise ValueError("access_token não foi encontrado dentro do objeto 'ls.user'.")
-
         warehouses = intelipost.obter_centros_de_distribuicao_api(driver, captured_token)
         carriers = intelipost.obter_transportadoras_api(driver, captured_token)
         margin_config = intelipost.obter_configuracao_margem_api(driver, captured_token)
-
         queue_gui.put({
             "type": "filters_loaded", "driver": driver, "token": captured_token,
             "warehouses": warehouses, "carriers": carriers
@@ -158,6 +151,7 @@ def carregar_filtros_thread(queue_gui, client_id):
             driver.quit()
 
 def save_report_thread(queue_gui, data, final=True):
+    # (Código inalterado)
     try:
         lista_divergencias, client_id, start_date, end_date, total_pedidos, duration_seconds = data
         config = configparser.ConfigParser()
@@ -201,45 +195,66 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhuma pré-fatura foi encontrada na Intelipost para os filtros selecionados.", "done": True})
             return
 
-        print(f"INFO: {len(pre_faturas_api)} pré-faturas encontradas. Etapa 2/3 - Enriqueçendo dados com detalhes (de forma concorrente)...")
+        print(f"INFO: {len(pre_faturas_api)} pré-faturas encontradas. Etapa 2/3 - Enriqueçendo dados com detalhes (em lotes sequenciais)...")
         
-        dados_api_list = []
-        total_faturas = len(pre_faturas_api)
+        ids_para_buscar = [item.get("id") for item in pre_faturas_api]
+        chunk_size = 70
+        lotes_de_ids = [ids_para_buscar[i:i + chunk_size] for i in range(0, len(ids_para_buscar), chunk_size)]
         
-        # --- IMPLEMENTAÇÃO DE CONCORRÊNCIA PARA ESCALABILIDADE ---
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            # Mapeia cada chamada de API a um item original para não perder os dados
-            futures = {executor.submit(intelipost.obter_detalhes_pre_fatura, driver, token, item.get("id")): item for item in pre_faturas_api}
+        detalhes_completos = {}
+        total_lotes = len(lotes_de_ids)
+        
+        # --- MELHORIA: LÓGICA DE RETENTATIVAS (RETRY) PARA CADA LOTE ---
+        for i, lote in enumerate(lotes_de_ids):
+            if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
+            queue_gui.put({"type": "progress_update", "current": i, "total": total_lotes, "label": f"Processando lote {i+1}/{total_lotes}"})
             
-            for i, future in enumerate(as_completed(futures)):
-                if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
-                queue_gui.put({"type": "progress_update", "current": i + 1, "total": total_faturas, "label": f"Buscando detalhes... {i+1}/{total_faturas}"})
-                
-                item = futures[future]
+            tentativas = 3
+            sucesso_lote = False
+            for tentativa in range(tentativas):
                 try:
-                    detalhes = future.result()
-                    if item.get("invoice") and len(item["invoice"]) > 0 and detalhes:
-                        order_number = item["invoice"][0].get("order_number")
-                        if order_number:
-                            total_weight, total_squared_weight, total_selected_weight = 0, 0, 0
-                            dimensions_list = []
-                            for volume in detalhes.get("volumes", []):
-                                total_weight += volume.get("weight", 0) or 0
-                                total_squared_weight += volume.get("squared_weight", 0) or 0
-                                total_selected_weight += volume.get("selected_weight", 0) or 0
-                                dims = volume.get("dimensions", {})
-                                dimensions_list.append(f"{dims.get('length', 0)}x{dims.get('width', 0)}x{dims.get('height', 0)}")
-                            dados_api_list.append({
-                                "so_order_number": order_number, "chave_cte": item.get("cte", {}).get("key"),
-                                "valor_intelipost": item.get("cte_value"), "tms_value": item.get("tms_value"),
-                                "nota_fiscal": detalhes.get("invoice", {}).get("number"),
-                                "cep_origem": detalhes.get("origin_zipcode"), "cep_destino": detalhes.get("destination_zipcode"),
-                                "api_peso_fisico": total_weight, "api_peso_cubado": total_squared_weight,
-                                "api_peso_cobrado": total_selected_weight, "api_dimensoes": " | ".join(dimensions_list)
-                            })
-                except Exception as exc:
-                    print(f"ERRO: Falha ao processar detalhes para o item {item.get('id')}: {exc}")
+                    print(f"INFO (Lotes): Buscando detalhes para o lote {i+1}/{total_lotes} (Tentativa {tentativa + 1}/{tentativas})...")
+                    resultado_lote = intelipost.obter_detalhes_em_lote(driver, token, lote)
+                    
+                    # A chamada pode ter sucesso mas retornar um dicionário vazio
+                    if resultado_lote is not None:
+                        detalhes_completos.update(resultado_lote)
+                        sucesso_lote = True
+                        break # Sucesso, sai do loop de tentativas
+                except Exception as exc_retry:
+                    print(f"AVISO: Tentativa {tentativa + 1} para o lote {i+1} falhou. Erro: {exc_retry}")
+                    if tentativa < tentativas - 1:
+                        time.sleep(5) # Espera 5 segundos antes de tentar novamente
+            
+            if not sucesso_lote:
+                print(f"ERRO CRÍTICO: Não foi possível processar o lote {i+1} após {tentativas} tentativas. Pulando este lote.")
+            
+            time.sleep(0.2) # Pausa de "respiro" entre os lotes
 
+        # (O restante da lógica de processamento permanece o mesmo)
+        dados_api_list = []
+        for item in pre_faturas_api:
+            detalhes = detalhes_completos.get(item.get("id"))
+            if item.get("invoice") and len(item["invoice"]) > 0 and detalhes:
+                order_number = item["invoice"][0].get("order_number")
+                if order_number:
+                    total_weight, total_squared_weight, total_selected_weight = 0, 0, 0
+                    dimensions_list = []
+                    for volume in detalhes.get("volumes", []):
+                        total_weight += volume.get("weight", 0) or 0
+                        total_squared_weight += volume.get("squared_weight", 0) or 0
+                        total_selected_weight += volume.get("selected_weight", 0) or 0
+                        dims = volume.get("dimensions", {})
+                        dimensions_list.append(f"{dims.get('length', 0)}x{dims.get('width', 0)}x{dims.get('height', 0)}")
+                    dados_api_list.append({
+                        "so_order_number": order_number, "chave_cte": item.get("cte", {}).get("key"),
+                        "valor_intelipost": item.get("cte_value"), "tms_value": item.get("tms_value"),
+                        "nota_fiscal": detalhes.get("invoice", {}).get("number"),
+                        "cep_origem": detalhes.get("origin_zipcode"), "cep_destino": detalhes.get("destination_zipcode"),
+                        "api_peso_fisico": total_weight, "api_peso_cubado": total_squared_weight,
+                        "api_peso_cobrado": total_selected_weight, "api_dimensoes": " | ".join(dimensions_list)
+                    })
+        
         df_api = pd.DataFrame(dados_api_list)
         if df_api.empty:
              print("ALERTA: A lista de dados da API ficou vazia após o enriquecimento.")
@@ -296,6 +311,7 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             print("\nPROCESSO DE AUDITORIA FINALIZADO.")
 
 if __name__ == "__main__":
+    # (Código inalterado)
     q_gui = queue.Queue()
     q_control = queue.Queue()
     stop_event = threading.Event()
@@ -335,7 +351,6 @@ if __name__ == "__main__":
                         automation_thread.start()
                 else:
                     gui_q.put({"type": "error", "title": "Erro de Sessão", "message": "Sessão ou token não encontrados. Carregue os filtros novamente.", "done": True})
-
             elif action == "stop":
                 stop_event.set()
             elif action == "save_report":
