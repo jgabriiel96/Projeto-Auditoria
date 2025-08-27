@@ -35,8 +35,42 @@ class App:
         
         self.root.bind("<Button-1>", self._close_calendar_if_open)
 
+    def _carregar_filtros(self, event=None, force_refresh=False):
+        """
+        Inicia o processo de carregamento de filtros para um novo cliente.
+        A lógica de reset do navegador agora é 100% gerenciada pelo backend.
+        """
+        client_id_str = self.client_id_entry.get()
+
+        if not client_id_str.isdigit():
+            # Limpa a UI se o ID for inválido
+            self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
+            self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
+            self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
+            return
+        
+        if not force_refresh and client_id_str == self.last_searched_client_id:
+            return
+        
+        # Limpa o estado visual da UI imediatamente
+        self.last_searched_client_id = client_id_str
+        self.driver = None
+        self.captured_token = None
+        self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
+        self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
+        self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
+        self._validate_all_fields()
+        
+        self.update_log("INFO: Solicitando nova sessão para o cliente...\n")
+        self._update_ui_state(False, loading_filters=True)
+        
+        # Envia a solicitação para o backend. O backend cuidará da limpeza da sessão.
+        self.queue_control.put({"action": "load_filters", "client_id": int(client_id_str)})
+
+    # O restante do arquivo pode ser colado da sua versão original/última versão.
+    # Nenhuma outra função precisa de alteração.
+
     def create_widgets(self):
-        # (código inalterado)
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
@@ -64,7 +98,7 @@ class App:
         self.start_date_entry = ttk.Entry(start_date_frame)
         self.start_date_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
         start_cal_button = ttk.Button(start_date_frame, text="📅", width=3,
-                                      command=lambda: self._open_calendar(self.start_date_entry))
+                                        command=lambda: self._open_calendar(self.start_date_entry))
         start_cal_button.pack(side="left")
         self.start_date_entry.bind("<KeyRelease>", self._on_date_change)
 
@@ -74,7 +108,7 @@ class App:
         self.end_date_entry = ttk.Entry(end_date_frame)
         self.end_date_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
         end_cal_button = ttk.Button(end_date_frame, text="📅", width=3,
-                                    command=lambda: self._open_calendar(self.end_date_entry))
+                                        command=lambda: self._open_calendar(self.end_date_entry))
         end_cal_button.pack(side="left")
         self.end_date_entry.bind("<KeyRelease>", self._on_date_change)
         
@@ -170,9 +204,6 @@ class App:
         start_date = self.start_date_entry.get()
         end_date = self.end_date_entry.get()
 
-        # --- LÓGICA DE FILTRO INTELIGENTE PARA ESCALABILIDADE ---
-        # Se todos os checkboxes estiverem marcados, envia uma lista vazia (busca todos),
-        # imitando o portal e evitando que a API falhe com listas muito grandes.
         all_warehouses_selected = all(item['var'].get() for item in self.vars_warehouses.values()) if self.vars_warehouses else False
         selected_warehouse_ids = [] if all_warehouses_selected else [wh_id for wh_id, item in self.vars_warehouses.items() if item['var'].get()]
 
@@ -205,7 +236,7 @@ class App:
                     self._popular_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras, message["carriers"], "Transportadoras")
                     if not self.driver or not self.captured_token:
                         messagebox.showerror("Erro de Autenticação", "Não foi possível obter a sessão do navegador.")
-                # ... (resto do método inalterado) ...
+                
                 elif msg_type == "progress_update":
                     self._update_progress(message["current"], message["total"], message.get("label", ""))
                 elif msg_type == "margin_info":
@@ -255,7 +286,6 @@ class App:
             self.root.after(100, self.process_gui_queue)
 
     def _validate_all_fields(self, *args):
-        # ... (código inalterado, mas agora verifica self.driver e self.captured_token)
         client_id_ok = self.client_id_entry.get().isdigit()
         dates_ok = False
         try:
@@ -272,9 +302,7 @@ class App:
         else:
             self.start_button.config(state="disabled")
 
-# ... (restante da classe inalterado)
     def _open_calendar(self, entry_widget):
-        # (código inalterado)
         self._close_calendar_if_open() 
         x = entry_widget.winfo_rootx()
         y = entry_widget.winfo_rooty() + entry_widget.winfo_height()
@@ -294,7 +322,6 @@ class App:
         self.calendar_window.bind("<Button-1>", lambda event: "break")
     
     def _on_date_selected(self, event, entry_widget):
-        # (código inalterado)
         widget = event.widget
         selected_date = widget.get_date()
         entry_widget.delete(0, tk.END)
@@ -303,13 +330,11 @@ class App:
         self._validate_all_fields()
     
     def _close_calendar_if_open(self, event=None):
-        # (código inalterado)
         if self.calendar_window:
             self.calendar_window.destroy()
             self.calendar_window = None
     
     def _on_date_change(self, event):
-        # (código inalterado)
         widget = event.widget
         if event.keysym in ('BackSpace', 'Delete'):
             self._validate_all_fields()
@@ -330,7 +355,6 @@ class App:
         self._validate_all_fields()
     
     def run_final_validation(self):
-        # (código inalterado)
         try:
             start_date = datetime.strptime(self.start_date_entry.get(), '%Y-%m-%d').date()
             end_date = datetime.strptime(self.end_date_entry.get(), '%Y-%m-%d').date()
@@ -340,7 +364,7 @@ class App:
             if start_date < earliest_date:
                 return False, f"O período de auditoria não pode começar antes de {earliest_date.strftime('%d/%m/%Y')} (limite de 90 dias)."
         except (ValueError, TypeError):
-              return False, "O formato de uma das datas é inválido. Use YYYY-MM-DD."
+                return False, "O formato de uma das datas é inválido. Use YYYY-MM-DD."
         if not self.client_id_entry.get().isdigit():
             return False, "O ID do Cliente é inválido."
         if not any(item['var'].get() for item in self.vars_warehouses.values()):
@@ -353,34 +377,11 @@ class App:
         return P.isdigit() or P == ""
 
     def stop_audit(self):
-        # (código inalterado)
         print("\nAVISO: Solicitação de parada enviada. Finalizando o pedido atual...")
         self.stop_button.config(text="Parando...", state="disabled")
         self.queue_control.put({"action": "stop"})
     
-    def _carregar_filtros(self, event=None, force_refresh=False):
-        # (código inalterado)
-        client_id_str = self.client_id_entry.get()
-        if not client_id_str.isdigit():
-            self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
-            self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
-            self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
-            self._validate_all_fields()
-            return
-        if not force_refresh and client_id_str == self.last_searched_client_id:
-            return
-        self.last_searched_client_id = client_id_str
-        self.driver = None 
-        self.captured_token = None
-        self.margin_label.config(text="Margem de Tolerância: (Aguardando cliente)")
-        self.update_log("INFO: Autenticando e buscando filtros para o cliente...\n")
-        self._update_ui_state(False, loading_filters=True)
-        self._limpar_checkboxes(self.scrollable_frame_wh, self.vars_warehouses)
-        self._limpar_checkboxes(self.scrollable_frame_carrier, self.vars_transportadoras)
-        self.queue_control.put({"action": "load_filters", "client_id": int(client_id_str)})
-    
     def _update_ui_state(self, is_running, loading_filters=False):
-        # (código inalterado)
         self.is_running = is_running
         new_state = "disabled" if is_running or loading_filters else "normal"
         self.client_id_entry.config(state=new_state)
@@ -407,7 +408,6 @@ class App:
             self.start_time = None
     
     def _update_timer(self):
-        # (código inalterado)
         if self.is_running and self.start_time:
             elapsed_seconds = time.time() - self.start_time
             formatted_time = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
@@ -417,7 +417,6 @@ class App:
             self.timer_label.config(text="Tempo de Execução: 00:00:00")
     
     def update_log(self, message):
-        # (código inalterado)
         if self.log_text.winfo_exists():
             self.log_text.config(state="normal")
             self.log_text.insert(tk.END, message)
@@ -426,12 +425,10 @@ class App:
             self.root.update_idletasks()
     
     def _limpar_checkboxes(self, frame, var_dict):
-        # (código inalterado)
         for widget in frame.winfo_children(): widget.destroy()
         var_dict.clear()
     
     def _popular_checkboxes(self, frame, var_dict, items, nome_item):
-        # (código inalterado)
         self._limpar_checkboxes(frame, var_dict)
         if items:
             for item_id, item_name in items:
@@ -446,12 +443,10 @@ class App:
         self._validate_all_fields()
     
     def _marcar_desmarcar_todos(self, var_dict, marcar: bool):
-        # (código inalterado)
         for item in var_dict.values():
             item['var'].set(marcar)
 
     def _update_progress(self, current: int, total: int, label: str = ""):
-        # (código inalterado)
         if total > 0:
             percent = (current / total) * 100
             self.progress_bar['value'] = percent
