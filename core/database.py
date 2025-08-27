@@ -24,7 +24,8 @@ def criar_conexao():
 
 def obter_dados_de_pedidos_especificos(client_id: int, lista_order_numbers: list) -> pd.DataFrame:
     """
-    Busca no banco de dados as informações para uma lista específica de números de pedido.
+    Busca no banco de dados as informações para uma lista específica de números de pedido,
+    agora incluindo o número do volume.
     """
     if not lista_order_numbers:
         return pd.DataFrame()
@@ -47,6 +48,9 @@ def obter_dados_de_pedidos_especificos(client_id: int, lista_order_numbers: list
             wa.wa_zip_code AS cep_origem_db,
             so.so_provider_shipping_costs AS so_provider_shipping_costs,
             sov.sov_weight AS db_peso_declarado,
+            
+            -- CAMPO ADICIONADO PARA O NÚMERO DO VOLUME --
+            sov.sov_shipment_order_volume_number AS db_numero_volume,
             
             CONCAT(sov.sov_length, 'x', sov.sov_width, 'x', sov.sov_height) AS db_dimensoes
 

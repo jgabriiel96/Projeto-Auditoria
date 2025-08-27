@@ -1,16 +1,36 @@
 # core/comparator.py
 
-def encontrar_divergencias(row):
+import pandas as pd
+
+def encontrar_divergencias(row: pd.Series) -> list | None:
     """
-    Recebe uma linha de DataFrame e retorna uma LISTA de dicionários, 
-    um para cada divergência encontrada (custo, peso, etc.).
+    Recebe uma linha de DataFrame JÁ AGREGADO POR PEDIDO e retorna uma lista 
+    de dicionários para cada divergência (Custo e Peso Total).
     """
     divergencias_encontradas = []
 
-    # --- 1. AUDITORIA DE CUSTO ---
+    # --- Dados base para todas as divergências deste PEDIDO ---
+    dados_base = {
+        'id_pedido': row.get('so_order_number'),
+        'pedido_canal_venda': row.get('db_pedido_canal_venda'),
+        'canal_venda': row.get('db_canal_venda'),
+        'nota_fiscal': row.get('nota_fiscal'),
+        'transportadora': row.get('lp_name'),
+        'chave_acesso': row.get('chave_cte'),
+        'cep_origem': row.get('cep_origem_db'),
+        'cep_destino': row.get('cep_destino_db'),
+        'db_cidade_destino': row.get('db_cidade_destino'),
+        'api_dimensoes': row.get('api_dimensoes'),
+        'numero_volume': row.get('numeros_volumes'),
+        'soma_peso_declarado': row.get('soma_peso_declarado'),
+        'api_peso_cubado': row.get('api_peso_cubado'),
+        'api_peso_cobrado': row.get('api_peso_cobrado'),
+    }
+
+    # --- 1. AUDITORIA DE CUSTO (Usa a margem configurada) ---
     try:
-        custo_db = float(row['so_provider_shipping_costs'])
-        valor_intelipost = float(row.get('valor_intelipost'))
+        custo_db = float(row.get('so_provider_shipping_costs'))
+        custo_api = float(row.get('valor_intelipost'))
         config_margem = row['config_margem']
         
         limite_tolerancia = 0.0
@@ -22,78 +42,64 @@ def encontrar_divergencias(row):
                 margem_formatada = f"R$ {limite_tolerancia:.2f} (Fixo)"
             elif margem_type == 'PERCENTAGE':
                 percentual = float(config_margem.get('value', 0.0))
-                limite_tolerancia = round(valor_intelipost * (percentual / 100.0), 2)
+                limite_tolerancia = round(custo_api * (percentual / 100.0), 2)
                 margem_formatada = f"{percentual}% (R$ {limite_tolerancia:.2f})"
             elif margem_type == 'SYSTEM_DEFAULT':
                 percentual = 1.0
-                limite_tolerancia = round(valor_intelipost * (percentual / 100.0), 2)
+                limite_tolerancia = round(custo_api * (percentual / 100.0), 2)
                 margem_formatada = f"Padrão do Sistema (1.0% = R$ {limite_tolerancia:.2f})"
             elif margem_type == 'DYNAMIC_CHOICE':
                 absolute_val = float(config_margem.get('absolute_value', 0.0))
                 percentage_val = float(config_margem.get('percentage_value', 0.0))
                 limite_absoluto = absolute_val
-                limite_percentual = round(valor_intelipost * (percentage_val / 100.0), 2)
+                limite_percentual = round(custo_api * (percentage_val / 100.0), 2)
                 limite_tolerancia = max(limite_absoluto, limite_percentual)
                 margem_formatada = (f"Dinâmico (Maior entre R$ {limite_absoluto:.2f} e "
                                     f"{percentage_val}% = R$ {limite_percentual:.2f}) -> "
                                     f"Aplicado: R$ {limite_tolerancia:.2f}")
 
-        diferenca_numerica = round(custo_db - valor_intelipost, 2)
+        diferenca_numerica = round(custo_db - custo_api, 2)
 
         if abs(diferenca_numerica) > limite_tolerancia:
             status_conferencia = "Custo superior ao da Fatura" if diferenca_numerica > 0 else "Custo inferior ao da Fatura"
-            divergencia_custo = {
-                'campo': 'Custo', 'valor_banco': custo_db, 'valor_intelipost': valor_intelipost,
-                'diferenca_valor': diferenca_numerica, 'status': status_conferencia, 
+            div_custo = dados_base.copy()
+            div_custo.update({
+                'campo': 'Custo',
+                'valor_banco': custo_db,
+                'valor_intelipost': custo_api,
+                'diferenca_valor': diferenca_numerica,
+                'status': status_conferencia,
                 'margem_aplicada': margem_formatada
-            }
-            divergencias_encontradas.append(divergencia_custo)
-
+            })
+            divergencias_encontradas.append(div_custo)
     except (ValueError, TypeError, KeyError):
         pass
 
-    # --- 2. AUDITORIA DE PESO ---
+    # --- 2. NOVA AUDITORIA DE PESO TOTAL (Sem margem) ---
     try:
-        peso_db = float(row.get('db_peso_declarado'))
-        peso_api = float(row.get('api_peso_cobrado'))
-        
-        limite_tolerancia_peso = round(peso_db * 0.05, 3) 
-        
-        diferenca_peso = round(peso_db - peso_api, 3)
+        soma_peso_declarado = float(row.get('soma_peso_declarado'))
+        api_peso_cubado = float(row.get('api_peso_cubado'))
+        api_peso_cobrado = float(row.get('api_peso_cobrado'))
 
-        if abs(diferenca_peso) > limite_tolerancia_peso:
-            status_peso = "Peso declarado superior ao cobrado" if diferenca_peso > 0 else "Peso declarado inferior ao cobrado"
-            divergencia_peso = {
-                'campo': 'Peso (kg)', 'valor_banco': peso_db, 'valor_intelipost': peso_api,
-                'diferenca_valor': diferenca_peso, 'status': status_peso, 
-                'margem_aplicada': f"5% ({limite_tolerancia_peso} kg)"
-            }
-            divergencias_encontradas.append(divergencia_peso)
-
+        # REGRA: O peso a ser considerado é o MAIOR entre a soma dos declarados e o cubado.
+        peso_considerado = max(soma_peso_declarado, api_peso_cubado)
+        
+        # Comparação direta, sem margem, arredondando para evitar erros de float.
+        if round(peso_considerado, 3) != round(api_peso_cobrado, 3):
+            diferenca_peso = round(peso_considerado - api_peso_cobrado, 3)
+            status_peso = f"Peso divergente. Considerado ({peso_considerado:.3f} kg) vs Cobrado ({api_peso_cobrado:.3f} kg)"
+            
+            div_peso = dados_base.copy()
+            div_peso.update({
+                'campo': 'Peso Total (kg)',
+                'valor_banco': peso_considerado, # Valor esperado pela regra de negócio
+                'valor_intelipost': api_peso_cobrado, # Valor que a transportadora efetivamente cobrou
+                'diferenca_valor': diferenca_peso,
+                'status': status_peso,
+                'margem_aplicada': 'N/A (Comparação Direta)'
+            })
+            divergencias_encontradas.append(div_peso)
     except (ValueError, TypeError, KeyError):
         pass
         
-    # --- ANEXA DADOS DE CONTEXTO A TODAS AS DIVERGÊNCIAS ENCONTRADAS ---
-    if divergencias_encontradas:
-        dados_contexto = {
-            'id_pedido': row.get('so_order_number'),
-            'chave_acesso': row.get('chave_cte'),
-            'transportadora': row.get('lp_name'),
-            'canal_venda': row.get('db_canal_venda'),
-            'pedido_canal_venda': row.get('db_pedido_canal_venda'),
-            'nota_fiscal': row.get('nota_fiscal'),
-            'cep_origem': row.get('cep_origem'),
-            'cep_destino': row.get('cep_destino'),
-            'db_cidade_destino': row.get('db_cidade_destino'), # <-- CORREÇÃO: Campo adicionado ao contexto
-            'db_peso_declarado': row.get('db_peso_declarado'),
-            'api_peso_fisico': row.get('api_peso_fisico'),
-            'api_peso_cubado': row.get('api_peso_cubado'),
-            'api_peso_cobrado': row.get('api_peso_cobrado'),
-            'api_dimensoes': row.get('api_dimensoes'),
-        }
-        for div in divergencias_encontradas:
-            div.update(dados_contexto)
-        
-        return divergencias_encontradas
-
-    return None
+    return divergencias_encontradas if divergencias_encontradas else None

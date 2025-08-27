@@ -70,6 +70,7 @@ def kill_browser_processes(exec_name: str):
 def carregar_filtros_thread(queue_gui, client_id):
     driver = None
     try:
+        # --- LÓGICA ORIGINAL DE CONEXÃO COM PERFIL PERSISTENTE RESTAURADA ---
         config = configparser.ConfigParser()
         config.read('config.ini')
         caminho_executavel = config.get('BROWSER', 'caminho_executavel', fallback=None)
@@ -105,17 +106,11 @@ def carregar_filtros_thread(queue_gui, client_id):
         driver = webdriver.Chrome(service=servico, options=options)
         print("SUCESSO: Robô conectado com sucesso ao navegador!")
 
-        # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
-        # Limpa a sessão do navegador LOGO APÓS conectar, ANTES de qualquer outra ação.
-        # Isso garante que a sessão do cliente anterior seja destruída sem quebrar a autenticação do perfil.
         print("INFO: Limpando sessão anterior para garantir um início limpo...")
         try:
-            # Garante que o driver tenha um foco antes de limpar
-            if not driver.current_url or driver.current_url == "about:blank":
-                 # Tenta obter o handle da primeira aba visível
+            if not driver.current_url or "about:blank" in driver.current_url:
                  if driver.window_handles:
                     driver.switch_to.window(driver.window_handles[0])
-
             driver.execute_script("window.localStorage.clear();")
             driver.execute_script("window.sessionStorage.clear();")
             driver.delete_all_cookies()
@@ -123,10 +118,8 @@ def carregar_filtros_thread(queue_gui, client_id):
             time.sleep(1)
         except Exception as e:
             print(f"AVISO: Não foi possível limpar a sessão anterior. Prosseguindo. Erro: {e}")
-        # --- FIM DA CORREÇÃO DEFINITIVA ---
         
         driver.set_script_timeout(120)
-        
         wait = WebDriverWait(driver, 60)
         sysnode_tab = driver.current_window_handle
         intelipost.preparar_pagina_e_capturar_token(driver, str(client_id))
@@ -168,11 +161,6 @@ def carregar_filtros_thread(queue_gui, client_id):
         print(f"\nERRO: {e}")
         traceback.print_exc()
         queue_gui.put({"type": "error", "title": "Erro na Preparação", "message": f"Ocorreu uma falha inesperada:\n\n{e}"})
-        if driver:
-            # Não usamos quit() aqui para não fechar o navegador do usuário
-            pass
-
-# (O resto do arquivo main.py continua inalterado)
 
 def save_report_thread(queue_gui, data, final=True):
     try:
@@ -185,9 +173,9 @@ def save_report_thread(queue_gui, data, final=True):
         spreadsheet_url = sheets.reportar_divergencias(lista_divergencias, sheet_name, client_id, start_date, end_date, recipient_email)
         
         if spreadsheet_url:
+            df_divergencias = pd.DataFrame(lista_divergencias)
             gspread_client = sheets.get_sheets_client()
             spreadsheet = gspread_client.open_by_url(spreadsheet_url)
-            df_divergencias = pd.DataFrame(lista_divergencias)
             sheets.criar_aba_sumario(spreadsheet, df_divergencias, total_pedidos)
             
             formatted_duration = time.strftime("%M minutos e %S segundos", time.gmtime(duration_seconds))
@@ -204,85 +192,56 @@ def save_report_thread(queue_gui, data, final=True):
 def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, driver, token, stop_event, q_control):
     start_time = time.time()
     lista_final_divergencias = []
-    df_merged = pd.DataFrame()
+    df_aggregated = pd.DataFrame()
     try:
-        # A lógica de auditoria permanece a mesma
         config_margem = intelipost.obter_configuracao_margem_api(driver, token)
         if not config_margem:
             raise ValueError("Não foi possível obter a configuração da margem.")
-
+        
         print("\nINFO: Etapa 1/3 - Buscando lista de pré-faturas na API...")
-        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(driver, token, data_inicio, data_fim, lista_ids_warehouses, lista_ids_transportadoras, stop_event)
+        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(driver, token, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, stop_event)
 
         if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
         if not pre_faturas_api:
             queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhuma pré-fatura foi encontrada na Intelipost para os filtros selecionados.", "done": True})
             return
 
-        print(f"INFO: {len(pre_faturas_api)} pré-faturas encontradas. Etapa 2/3 - Enriqueçendo dados com detalhes (em lotes sequenciais)...")
-        
+        print(f"INFO: {len(pre_faturas_api)} pré-faturas encontradas. Etapa 2/3 - Enriqueçendo dados com detalhes...")
         ids_para_buscar = [item.get("id") for item in pre_faturas_api]
         chunk_size = 100
         lotes_de_ids = [ids_para_buscar[i:i + chunk_size] for i in range(0, len(ids_para_buscar), chunk_size)]
-        
         detalhes_completos = {}
-        total_lotes = len(lotes_de_ids)
+        for lote in lotes_de_ids:
+            if stop_event.is_set(): break
+            resultado_lote = intelipost.obter_detalhes_em_lote(driver, token, lote)
+            if resultado_lote:
+                detalhes_completos.update(resultado_lote)
         
-        for i, lote in enumerate(lotes_de_ids):
-            if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
-            queue_gui.put({"type": "progress_update", "current": i, "total": total_lotes, "label": f"Processando lote {i+1}/{total_lotes}"})
-            
-            tentativas = 3
-            sucesso_lote = False
-            for tentativa in range(tentativas):
-                try:
-                    print(f"INFO (Lotes): Buscando detalhes para o lote {i+1}/{total_lotes} (Tentativa {tentativa + 1}/{tentativas})...")
-                    resultado_lote = intelipost.obter_detalhes_em_lote(driver, token, lote)
-                    if resultado_lote is not None:
-                        detalhes_completos.update(resultado_lote)
-                        sucesso_lote = True
-                        break 
-                except Exception as exc_retry:
-                    print(f"AVISO: Tentativa {tentativa + 1} para o lote {i+1} falhou. Erro: {exc_retry}")
-                    if tentativa < tentativas - 1:
-                        time.sleep(5) 
-            
-            if not sucesso_lote:
-                print(f"ERRO CRÍTICO: Não foi possível processar o lote {i+1} após {tentativas} tentativas. Pulando este lote.")
-            time.sleep(0.2)
-
         dados_api_list = []
         for item in pre_faturas_api:
             detalhes = detalhes_completos.get(item.get("id"))
             if item.get("invoice") and len(item["invoice"]) > 0 and detalhes:
                 order_number = item["invoice"][0].get("order_number")
                 if order_number:
-                    total_weight, total_squared_weight, total_selected_weight = 0, 0, 0
+                    total_squared_weight, total_selected_weight = 0, 0
                     dimensions_list = []
                     for volume in detalhes.get("volumes", []):
-                        total_weight += volume.get("weight", 0) or 0
                         total_squared_weight += volume.get("squared_weight", 0) or 0
                         total_selected_weight += volume.get("selected_weight", 0) or 0
                         dims = volume.get("dimensions", {})
                         dimensions_list.append(f"{dims.get('length', 0)}x{dims.get('width', 0)}x{dims.get('height', 0)}")
                     dados_api_list.append({
-                        "so_order_number": order_number, "chave_cte": item.get("cte", {}).get("key"),
-                        "valor_intelipost": item.get("cte_value"), "tms_value": item.get("tms_value"),
-                        "nota_fiscal": detalhes.get("invoice", {}).get("number"),
-                        "cep_origem": detalhes.get("origin_zipcode"), "cep_destino": detalhes.get("destination_zipcode"),
-                        "api_peso_fisico": total_weight, "api_peso_cubado": total_squared_weight,
-                        "api_peso_cobrado": total_selected_weight, "api_dimensoes": " | ".join(dimensions_list)
+                        "so_order_number": order_number, "cte_value": item.get("cte_value"),
+                        "tms_value": item.get("tms_value"), "cte": item.get("cte"),
+                        "api_peso_cubado": total_squared_weight, "api_peso_cobrado": total_selected_weight,
+                        "api_dimensoes": " | ".join(dimensions_list)
                     })
-        
         df_api = pd.DataFrame(dados_api_list)
         if df_api.empty:
-            print("ALERTA: A lista de dados da API ficou vazia após o enriquecimento.")
-            queue_gui.put({"type": "info", "title": "Aviso", "message": "Nenhum dado detalhado pôde ser obtido da API.", "done": True})
-            return
+            raise ValueError("Nenhum dado detalhado pôde ser obtido da API após o enriquecimento.")
 
         print(f"INFO: Etapa 3/3 - Cruzando informações com o banco de dados...")
-        lista_pedidos_api = df_api["so_order_number"].unique().tolist()
-        df_pedidos_db = database.obter_dados_de_pedidos_especificos(client_id, lista_pedidos_api)
+        df_pedidos_db = database.obter_dados_de_pedidos_especificos(client_id, df_api["so_order_number"].unique().tolist())
         if df_pedidos_db.empty:
             raise ValueError("Nenhum dos pedidos corresponde a um pedido no banco de dados.")
 
@@ -291,20 +250,40 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         df_api['so_order_number'] = df_api['so_order_number'].astype(str)
         df_merged = pd.merge(df_pedidos_db, df_api, on="so_order_number", how="inner")
         
-        print("INFO: Aplicando regra de negócio de recotação para custos não encontrados...")
         df_merged['so_provider_shipping_costs'].fillna(df_merged['tms_value'], inplace=True)
-        df_merged.drop(columns=['tms_value'], inplace=True)
-        
         if df_merged.empty:
             raise ValueError("Falha ao unir os dados da API e do banco de dados.")
 
-        total_pedidos_para_auditar = len(df_merged)
-        print(f"INFO: {total_pedidos_para_auditar} pedidos prontos para comparação. Iniciando processamento...")
-        queue_gui.put({"type": "progress_update", "current": 0, "total": total_pedidos_para_auditar, "label": "Comparando dados..."})
-        df_merged['config_margem'] = [config_margem] * total_pedidos_para_auditar
-        resultados = df_merged.apply(comparator.encontrar_divergencias, axis=1)
+        print("INFO: Agregando dados de volumes por pedido para análise consolidada...")
+        df_merged['config_margem'] = df_merged.apply(lambda row: config_margem, axis=1)
+
+        df_aggregated = df_merged.groupby('so_order_number').agg(
+            soma_peso_declarado=('db_peso_declarado', 'sum'),
+            numeros_volumes=('db_numero_volume', lambda x: ' | '.join(sorted(x.astype(str)))),
+            config_margem=('config_margem', 'first'),
+            valor_intelipost=('cte_value', 'first'),
+            so_provider_shipping_costs=('so_provider_shipping_costs', 'first'),
+            api_peso_cubado=('api_peso_cubado', 'first'),
+            api_peso_cobrado=('api_peso_cobrado', 'first'),
+            chave_cte=('cte', lambda x: x.iloc[0].get('key') if x.iloc[0] and x.iloc[0].get('key') else ''),
+            lp_name=('lp_name', 'first'),
+            db_canal_venda=('db_canal_venda', 'first'),
+            db_pedido_canal_venda=('db_pedido_canal_venda', 'first'),
+            nota_fiscal=('nota_fiscal_db', 'first'),
+            cep_origem_db=('cep_origem_db', 'first'),
+            cep_destino_db=('cep_destino_db', 'first'),
+            db_cidade_destino=('db_cidade_destino', 'first'),
+            api_dimensoes=('api_dimensoes', 'first')
+        ).reset_index()
+
+        print(f"INFO: {len(df_aggregated)} pedidos únicos prontos para comparação. Iniciando processamento...")
+        queue_gui.put({"type": "progress_update", "current": 0, "total": len(df_aggregated), "label": "Comparando dados..."})
+        
+        resultados = df_aggregated.apply(comparator.encontrar_divergencias, axis=1)
+        
         lista_final_divergencias = [item for sublist in resultados.dropna() for item in sublist]
-        queue_gui.put({"type": "progress_update", "current": total_pedidos_para_auditar, "total": total_pedidos_para_auditar, "label": "Finalizando..."})
+        
+        queue_gui.put({"type": "progress_update", "current": len(df_aggregated), "total": len(df_aggregated), "label": "Finalizando..."})
         print(f"SUCESSO: Comparação concluída. {len(lista_final_divergencias)} divergências encontradas.")
 
     except InterruptedError:
@@ -316,12 +295,9 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         return
     finally:
         if driver:
-            # Não usamos quit() para não fechar o navegador do usuário
             pass
         duration_seconds = time.time() - start_time
-        formatted_duration = time.strftime("%H horas, %M minutos e %S segundos", time.gmtime(duration_seconds))
-        print(f"\nINFO: Tempo total da auditoria: {formatted_duration}.")
-        total_pedidos_auditados = len(df_merged) if not df_merged.empty else 0
+        total_pedidos_auditados = len(df_aggregated) if not df_aggregated.empty else 0
         data_para_salvar = (lista_final_divergencias, client_id, data_inicio, data_fim, total_pedidos_auditados, duration_seconds)
         
         if stop_event.is_set():
@@ -345,8 +321,6 @@ if __name__ == "__main__":
     
     def on_closing():
         if app.driver:
-            # Ao fechar o app, não tentamos mais matar o navegador, 
-            # pois ele é a sessão principal do usuário.
             print("INFO: Desconectando do navegador...")
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_closing)
