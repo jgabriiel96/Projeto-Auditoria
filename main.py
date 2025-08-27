@@ -70,7 +70,6 @@ def kill_browser_processes(exec_name: str):
 def carregar_filtros_thread(queue_gui, client_id):
     driver = None
     try:
-        # --- LÓGICA ORIGINAL DE CONEXÃO COM PERFIL PERSISTENTE RESTAURADA ---
         config = configparser.ConfigParser()
         config.read('config.ini')
         caminho_executavel = config.get('BROWSER', 'caminho_executavel', fallback=None)
@@ -199,7 +198,7 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
             raise ValueError("Não foi possível obter a configuração da margem.")
         
         print("\nINFO: Etapa 1/3 - Buscando lista de pré-faturas na API...")
-        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(driver, token, data_inicio, data_fim, lista_ids_transportadoras, lista_ids_warehouses, stop_event)
+        pre_faturas_api = intelipost.obter_pre_faturas_prontas_por_data(driver, token, data_inicio, data_fim, lista_ids_warehouses, lista_ids_transportadoras, stop_event)
 
         if stop_event.is_set(): raise InterruptedError("Processo interrompido.")
         if not pre_faturas_api:
@@ -211,12 +210,21 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         chunk_size = 100
         lotes_de_ids = [ids_para_buscar[i:i + chunk_size] for i in range(0, len(ids_para_buscar), chunk_size)]
         detalhes_completos = {}
-        for lote in lotes_de_ids:
+        total_lotes = len(lotes_de_ids)
+
+        # --- CORREÇÃO: RESTAURADO O LOOP COM ATUALIZAÇÃO DE PROGRESSO ---
+        for i, lote in enumerate(lotes_de_ids):
             if stop_event.is_set(): break
+            
+            progress_label = f"Enriquecendo dados: Lote {i+1}/{total_lotes}"
+            queue_gui.put({"type": "progress_update", "current": i, "total": total_lotes, "label": progress_label})
+            
             resultado_lote = intelipost.obter_detalhes_em_lote(driver, token, lote)
             if resultado_lote:
                 detalhes_completos.update(resultado_lote)
-        
+
+        queue_gui.put({"type": "progress_update", "current": total_lotes, "total": total_lotes, "label": "Dados enriquecidos."})
+
         dados_api_list = []
         for item in pre_faturas_api:
             detalhes = detalhes_completos.get(item.get("id"))
@@ -277,13 +285,13 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         ).reset_index()
 
         print(f"INFO: {len(df_aggregated)} pedidos únicos prontos para comparação. Iniciando processamento...")
-        queue_gui.put({"type": "progress_update", "current": 0, "total": len(df_aggregated), "label": "Comparando dados..."})
+        queue_gui.put({"type": "progress_update", "current": 0, "total": len(df_aggregated), "label": "Analisando divergências..."})
         
         resultados = df_aggregated.apply(comparator.encontrar_divergencias, axis=1)
         
         lista_final_divergencias = [item for sublist in resultados.dropna() for item in sublist]
         
-        queue_gui.put({"type": "progress_update", "current": len(df_aggregated), "total": len(df_aggregated), "label": "Finalizando..."})
+        queue_gui.put({"type": "progress_update", "current": len(df_aggregated), "total": len(df_aggregated), "label": "Análise finalizada."})
         print(f"SUCESSO: Comparação concluída. {len(lista_final_divergencias)} divergências encontradas.")
 
     except InterruptedError:
