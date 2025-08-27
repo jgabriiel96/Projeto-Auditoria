@@ -198,7 +198,7 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         print(f"INFO: {len(pre_faturas_api)} pré-faturas encontradas. Etapa 2/3 - Enriqueçendo dados com detalhes (em lotes sequenciais)...")
         
         ids_para_buscar = [item.get("id") for item in pre_faturas_api]
-        chunk_size = 70
+        chunk_size = 100
         lotes_de_ids = [ids_para_buscar[i:i + chunk_size] for i in range(0, len(ids_para_buscar), chunk_size)]
         
         detalhes_completos = {}

@@ -1,0 +1,8 @@
+# 1. Busca o estado mais recente do GitHub
+git fetch origin
+
+# 2. Reseta seu projeto local para ser igual ao do GitHub, descartando alterações
+git reset --hard origin/main
+
+# 3. (Opcional) Limpa qualquer arquivo novo que não está no GitHub
+git clean -f
