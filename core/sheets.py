@@ -22,11 +22,23 @@ COLORS = {
 def get_sheets_client():
     return gspread.service_account(filename='credentials.json')
 
-def _execute_batch_update(spreadsheet, requests_body):
-    if not requests_body['requests']:
+def _execute_batch_update(spreadsheet, all_requests: list, batch_size: int = 50000):
+    """
+    Executa as requisições de batch_update em lotes para evitar o erro de limite da API.
+    """
+    if not all_requests:
         return
+    
     try:
-        spreadsheet.batch_update(requests_body)
+        for i in range(0, len(all_requests), batch_size):
+            batch = all_requests[i:i + batch_size]
+            requests_body = {'requests': batch}
+            print(f"INFO (SHEETS): Enviando lote de {len(batch)} requisições de formatação...")
+            spreadsheet.batch_update(requests_body)
+            time.sleep(1) # Pequena pausa para não sobrecarregar a API
+        
+        print("SUCESSO: Formatação profissional aplicada com sucesso.")
+            
     except Exception as e:
         print(f"AVISO: Falha ao aplicar formatação avançada. Detalhe: {e}")
 
@@ -78,15 +90,17 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
         df.sort_values(by=['id_pedido', 'campo'], ascending=[True, False], inplace=True)
 
         header = [
-            'Pedido', 'Nota Fiscal', 'Transportadora', 'Chave Acesso (CT-e)', 'Volumes do Pedido',
-            'Campo Divergente', 'Valor Esperado (Regra)', 'Valor Cobrado (Fatura)', 'Diferença', 'Status',
-            'Soma Pesos Declarados (kg)', 'Peso Cubado Total (API)', 'Dimensões (Volumes)'
+            'Pedido', 'Pedido Canal Venda', 'Canal Venda', 'Nota Fiscal', 'Chave Acesso (CT-e)', 'Transportadora', 
+            'CEP Origem', 'CEP Destino', 'Cidade Destino', 'Campo Divergente', 'Valor Esperado (Regra)', 
+            'Valor Cobrado (Fatura)', 'Diferença', 'Status', 'Margem Aplicada', 'Volumes do Pedido', 
+            'Soma Pesos Declarados (kg)', 'Peso Cubado Total (API)', 'Peso Cobrado (API)', 'Dimensões (Volumes)'
         ]
         
         colunas_ordenadas = [
-            'id_pedido', 'nota_fiscal', 'transportadora', 'chave_acesso', 'numero_volume',
-            'campo', 'valor_banco', 'valor_intelipost', 'diferenca_valor', 'status',
-            'soma_peso_declarado', 'api_peso_cubado', 'api_dimensoes'
+            'id_pedido', 'pedido_canal_venda', 'canal_venda', 'nota_fiscal', 'chave_acesso', 'transportadora',
+            'cep_origem', 'cep_destino', 'db_cidade_destino', 'campo', 'valor_banco', 'valor_intelipost', 
+            'diferenca_valor', 'status', 'margem_aplicada', 'numero_volume', 'soma_peso_declarado', 
+            'api_peso_cubado', 'api_peso_cobrado', 'api_dimensoes'
         ]
         
         for col in colunas_ordenadas:
@@ -111,10 +125,10 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
             sheet.update('A7', rows_to_add)
         print(f"SUCESSO: {len(rows_to_add)} divergências detalhadas escritas na planilha.")
 
-        requests = []
+        all_formatting_requests = []
         num_cols = len(header)
         
-        requests.extend([
+        all_formatting_requests.extend([
             {'mergeCells': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 1, 'startColumnIndex': 0, 'endColumnIndex': num_cols}}},
             {'repeatCell': {'cell': {'userEnteredFormat': {'backgroundColor': COLORS['intelipost_dark_green'], 'horizontalAlignment': 'CENTER', 'textFormat': {'foregroundColor': COLORS['white'], 'fontSize': 16, 'bold': True}}}, 'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': 1}, 'fields': 'userEnteredFormat'}},
             {'mergeCells': {'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 2, 'startColumnIndex': 0, 'endColumnIndex': num_cols}}},
@@ -123,13 +137,14 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
             {'repeatCell': {'cell': {'userEnteredFormat': {'backgroundColor': COLORS['light_gray_background'], 'textFormat': {'bold': True}}}, 'range': {'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': 4}, 'fields': 'userEnteredFormat'}},
         ])
         
-        requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'backgroundColor': COLORS['intelipost_dark_green'], 'textFormat': {'foregroundColor': COLORS['white'], 'bold': True}, 'horizontalAlignment': 'CENTER'}}, 'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': num_cols}, 'fields': 'userEnteredFormat'}})
+        all_formatting_requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'backgroundColor': COLORS['intelipost_dark_green'], 'textFormat': {'foregroundColor': COLORS['white'], 'bold': True}, 'horizontalAlignment': 'CENTER'}}, 'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': num_cols}, 'fields': 'userEnteredFormat'}})
         
         colunas_para_mesclar = [
-            'Pedido', 'Nota Fiscal', 'Transportadora', 'Chave Acesso (CT-e)', 
-            'Volumes do Pedido', 'Soma Pesos Declarados (kg)', 
-            'Peso Cubado Total (API)', 'Dimensões (Volumes)'
+            'Pedido', 'Pedido Canal Venda', 'Canal Venda', 'Nota Fiscal', 'Chave Acesso (CT-e)', 'Transportadora',
+            'CEP Origem', 'CEP Destino', 'Cidade Destino', 'Volumes do Pedido', 'Soma Pesos Declarados (kg)', 
+            'Peso Cubado Total (API)', 'Peso Cobrado (API)', 'Dimensões (Volumes)'
         ]
+        
         indices_colunas = [header.index(col) for col in colunas_para_mesclar if col in header]
         start_row_api = 6
         current_group_start = start_row_api
@@ -141,75 +156,45 @@ def reportar_divergencias(lista_divergencias: list, sheet_name: str, client_id: 
                 group_end_index = start_row_api + i
                 if group_end_index > current_group_start:
                     bg_color = COLORS['light_gray_background'] if use_light_gray_background else COLORS['white']
-                    # --- Adiciona o alinhamento horizontal central ---
-                    requests.append({
-                        'repeatCell': {
-                            'cell': {
-                                'userEnteredFormat': {
-                                    'backgroundColor': bg_color,
-                                    'horizontalAlignment': 'CENTER'
-                                }
-                            },
-                            'range': {
-                                'sheetId': sheet_id,
-                                'startRowIndex': current_group_start,
-                                'endRowIndex': group_end_index
-                            },
-                            'fields': 'userEnteredFormat(backgroundColor,horizontalAlignment)'
-                        }
-                    })
+                    all_formatting_requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'backgroundColor': bg_color, 'horizontalAlignment': 'CENTER'}},'range': {'sheetId': sheet_id, 'startRowIndex': current_group_start, 'endRowIndex': group_end_index}, 'fields': 'userEnteredFormat(backgroundColor,horizontalAlignment)'}})
                     for col_index in indices_colunas:
                         merge_range = {'sheetId': sheet_id, 'startRowIndex': current_group_start, 'endRowIndex': group_end_index, 'startColumnIndex': col_index, 'endColumnIndex': col_index + 1}
-                        requests.append({'mergeCells': {'range': merge_range, 'mergeType': 'MERGE_COLUMNS'}})
-                        requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'verticalAlignment': 'MIDDLE'}}, 'range': merge_range, 'fields': 'userEnteredFormat.verticalAlignment'}})
+                        all_formatting_requests.append({'mergeCells': {'range': merge_range, 'mergeType': 'MERGE_COLUMNS'}})
+                        all_formatting_requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'verticalAlignment': 'MIDDLE'}}, 'range': merge_range, 'fields': 'userEnteredFormat.verticalAlignment'}})
                 
-                requests.append({'updateBorders': {'range': {'sheetId': sheet_id, 'startRowIndex': group_end_index, 'endRowIndex': group_end_index + 1, 'startColumnIndex': 0, 'endColumnIndex': num_cols}, 'top': border_style}})
+                all_formatting_requests.append({'updateBorders': {'range': {'sheetId': sheet_id, 'startRowIndex': group_end_index - 1, 'endRowIndex': group_end_index, 'startColumnIndex': 0, 'endColumnIndex': num_cols}, 'bottom': border_style}})
                 current_group_start = group_end_index
                 use_light_gray_background = not use_light_gray_background
         
         last_group_end_index = len(df) + start_row_api
         if last_group_end_index > current_group_start:
             bg_color = COLORS['light_gray_background'] if use_light_gray_background else COLORS['white']
-            # --- Adiciona o alinhamento horizontal central para o último grupo ---
-            requests.append({
-                'repeatCell': {
-                    'cell': {
-                        'userEnteredFormat': {
-                            'backgroundColor': bg_color,
-                            'horizontalAlignment': 'CENTER'
-                        }
-                    },
-                    'range': {
-                        'sheetId': sheet_id,
-                        'startRowIndex': current_group_start,
-                        'endRowIndex': last_group_end_index
-                    },
-                    'fields': 'userEnteredFormat(backgroundColor,horizontalAlignment)'
-                }
-            })
+            all_formatting_requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'backgroundColor': bg_color, 'horizontalAlignment': 'CENTER'}}, 'range': {'sheetId': sheet_id, 'startRowIndex': current_group_start, 'endRowIndex': last_group_end_index}, 'fields': 'userEnteredFormat(backgroundColor,horizontalAlignment)'}})
             for col_index in indices_colunas:
                 merge_range = {'sheetId': sheet_id, 'startRowIndex': current_group_start, 'endRowIndex': last_group_end_index, 'startColumnIndex': col_index, 'endColumnIndex': col_index + 1}
-                requests.append({'mergeCells': {'range': merge_range, 'mergeType': 'MERGE_COLUMNS'}})
-                requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'verticalAlignment': 'MIDDLE'}}, 'range': merge_range, 'fields': 'userEnteredFormat.verticalAlignment'}})
+                all_formatting_requests.append({'mergeCells': {'range': merge_range, 'mergeType': 'MERGE_COLUMNS'}})
+                all_formatting_requests.append({'repeatCell': {'cell': {'userEnteredFormat': {'verticalAlignment': 'MIDDLE'}}, 'range': merge_range, 'fields': 'userEnteredFormat.verticalAlignment'}})
+        
+        all_formatting_requests.append({'updateBorders': {'range': {'sheetId': sheet_id, 'startRowIndex': last_group_end_index - 1, 'endRowIndex': last_group_end_index, 'startColumnIndex': 0, 'endColumnIndex': num_cols}, 'bottom': border_style}})
 
-        requests.append({'updateSheetProperties': {'properties': {'sheetId': sheet_id, 'gridProperties': {'frozenRowCount': 6}}, 'fields': 'gridProperties.frozenRowCount'}})
-        requests.append({'setBasicFilter': {'filter': {'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': len(rows_to_add) + 6, 'startColumnIndex': 0, 'endColumnIndex': num_cols}}}})
-        requests.extend([
+        all_formatting_requests.append({'updateSheetProperties': {'properties': {'sheetId': sheet_id, 'gridProperties': {'frozenRowCount': 6}}, 'fields': 'gridProperties.frozenRowCount'}})
+        all_formatting_requests.append({'setBasicFilter': {'filter': {'range': {'sheetId': sheet_id, 'startRowIndex': 5, 'endRowIndex': len(rows_to_add) + 6, 'startColumnIndex': 0, 'endColumnIndex': num_cols}}}})
+        all_formatting_requests.extend([
             {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': num_cols}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'superior'}]}, 'format': {'backgroundColor': COLORS['light_green_background']}}}, 'index': 0}},
             {'addConditionalFormatRule': {'rule': {'ranges': [{'sheetId': sheet_id, 'startRowIndex': 6, 'startColumnIndex': 0, 'endColumnIndex': num_cols}], 'booleanRule': {'condition': {'type': 'TEXT_CONTAINS', 'values': [{'userEnteredValue': 'inferior'}]}, 'format': {'backgroundColor': COLORS['light_red_background']}}}, 'index': 1}}
         ])
         
-        colunas_largas = ['Volumes do Pedido', 'Dimensões (Volumes)']
+        colunas_largas = ['Volumes do Pedido', 'Dimensões (Volumes)', 'Pedido Canal Venda', 'Status', 'Margem Aplicada']
+        
         indices_colunas_largas = [header.index(col) for col in colunas_largas if col in header]
 
         for col_idx in indices_colunas_largas:
-            requests.append({"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": col_idx, "endIndex": col_idx + 1}, "properties": {"pixelSize": 200}, "fields": "pixelSize"}})
-            requests.append({"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 6, "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1}, "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}}, "fields": "userEnteredFormat.wrapStrategy"}})
+            all_formatting_requests.append({"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": col_idx, "endIndex": col_idx + 1}, "properties": {"pixelSize": 200}, "fields": "pixelSize"}})
+            all_formatting_requests.append({"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 6, "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1}, "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}}, "fields": "userEnteredFormat.wrapStrategy"}})
 
-        requests.append({'autoResizeDimensions': {'dimensions': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': num_cols}}})
+        all_formatting_requests.append({'autoResizeDimensions': {'dimensions': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': num_cols}}})
         
-        _execute_batch_update(spreadsheet, {'requests': requests})
-        print("SUCESSO: Formatação profissional e agrupamento aplicados na aba de Divergências.")
+        _execute_batch_update(spreadsheet, all_formatting_requests)
         
         return spreadsheet.url
         
@@ -320,9 +305,9 @@ def criar_aba_sumario(spreadsheet, df_divergencias, total_pedidos_auditados):
             ])
         requests.append({'autoResizeDimensions': {'dimensions': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 7}}})
         
-        _execute_batch_update(spreadsheet, requests_body)
-        print("SUCESSO: Aba de Sumário profissional criada/atualizada.")
-
+        _execute_batch_update(spreadsheet, requests)
+        # Removido o print de sucesso daqui, pois já está dentro da _execute_batch_update
+        
     except Exception as e:
         print(f"Erro ao criar aba de sumário: {str(e)}")
         traceback.print_exc()
