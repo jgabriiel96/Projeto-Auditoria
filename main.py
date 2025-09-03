@@ -5,7 +5,8 @@ from core import database, comparator, sheets, intelipost
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from webdriver_manager.chrome import ChromeDriverManager
+# REMOVIDO: Não precisamos mais do webdriver_manager
+# from webdriver_manager.chrome import ChromeDriverManager 
 from selenium.common.exceptions import WebDriverException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -85,6 +86,7 @@ def carregar_filtros_thread(queue_gui, client_id):
         config = configparser.ConfigParser()
         config.read('config.ini')
         caminho_executavel = config.get('BROWSER', 'caminho_executavel', fallback=None)
+        # O config.ini original não tinha remote_debugging_port, adicionando fallback seguro
         debug_port_str = config.get('BROWSER', 'remote_debugging_port', fallback='9222')
         debug_port = int(debug_port_str)
         headless_mode = config.getboolean('AUTOMATION', 'headless', fallback=False)
@@ -113,7 +115,11 @@ def carregar_filtros_thread(queue_gui, client_id):
         options = ChromeOptions()
         options.binary_location = caminho_executavel
         options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
-        servico = Service(ChromeDriverManager().install())
+        
+        # *** A ÚNICA MUDANÇA ESTÁ AQUI ***
+        # Deixamos o Selenium gerenciar o download do driver correto, resolvendo o erro de versão.
+        servico = Service() 
+        
         driver = webdriver.Chrome(service=servico, options=options)
         print("SUCESSO: Robô conectado com sucesso ao navegador!")
         
@@ -141,6 +147,8 @@ def carregar_filtros_thread(queue_gui, client_id):
         traceback.print_exc()
         queue_gui.put({"type": "error", "title": "Erro na Preparação", "message": f"Ocorreu uma falha inesperada:\n\n{e}"})
 
+# TODO: Adicione o resto do seu código original (save_report_thread, executar_auditoria_thread, __main__, etc.) aqui.
+# Eles não precisam de nenhuma alteração.
 def save_report_thread(queue_gui, data, final=True):
     try:
         lista_divergencias, client_id, start_date, end_date, total_pedidos, duration_seconds = data
@@ -244,7 +252,6 @@ def executar_auditoria_thread(queue_gui, client_id, data_inicio, data_fim, lista
         df_api['so_order_number'] = df_api['so_order_number'].astype(str)
         df_merged = pd.merge(df_pedidos_db, df_api, on="so_order_number", how="inner")
         
-        # Correção para o FutureWarning do Pandas
         df_merged['so_provider_shipping_costs'] = df_merged['so_provider_shipping_costs'].fillna(df_merged['tms_value'])
         if df_merged.empty:
             raise ValueError("Falha ao unir os dados da API e do banco de dados.")
